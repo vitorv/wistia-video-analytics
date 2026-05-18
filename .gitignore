@@ -1,2 +1,14 @@
 # ai memory vault
 context_vault/
+
+# secrets
+.env
+
+# api exploration responses (may contain sensitive data)
+scripts/api_responses/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
