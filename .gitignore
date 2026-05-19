@@ -1,5 +1,6 @@
-# ai memory vault
+# ai memory vault and agent md files
 context_vault/
+CLAUDE.md
 
 # secrets
 .env
