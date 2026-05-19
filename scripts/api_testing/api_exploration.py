@@ -39,7 +39,7 @@ HEADERS = {
     "Accept": "application/json",
 }
 
-OUTPUT_DIR = Path("scripts/api_responses")
+OUTPUT_DIR = Path(__file__).parent / "api_responses"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 

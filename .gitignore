@@ -5,7 +5,7 @@ context_vault/
 .env
 
 # api exploration responses (may contain sensitive data)
-scripts/api_responses/
+scripts/api_testing/api_responses/
 
 # python
 __pycache__/
