@@ -11,6 +11,7 @@ Usage:
 """
 
 import os
+import sys
 import json
 import requests
 from datetime import datetime, timedelta
@@ -28,7 +29,7 @@ except ImportError:
 API_TOKEN = os.environ.get("WISTIA_API_TOKEN")
 if not API_TOKEN:
     print("❌ WISTIA_API_TOKEN not found. Create a .env file with: WISTIA_API_TOKEN=your_token")
-    exit(1)
+    sys.exit(1)
 
 MEDIA_IDS = ["gskhw4w4lm", "v08dlrgr7v"]
 BASE_URL_MODERN = "https://api.wistia.com/modern"
@@ -45,7 +46,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ─── Helper ──────────────────────────────────────────────────────────────────
 
-def fetch_and_save(label: str, url: str, params: dict = None) -> dict | list | None:
+def fetch_and_save(label: str, url: str, params: dict | None = None) -> dict | list | None:
     """Make a GET request, print summary, save full response to file."""
     print(f"\n{'='*60}")
     print(f"📡 {label}")
@@ -86,7 +87,10 @@ def fetch_and_save(label: str, url: str, params: dict = None) -> dict | list | N
 
 def main():
     print("🔍 Wistia Stats API Exploration")
-    print(f"   Token: {API_TOKEN[:8]}...{API_TOKEN[-4:]}")
+    token_display = (
+        f"{API_TOKEN[:8]}...{API_TOKEN[-4:]}" if API_TOKEN else "N/A"
+    )
+    print(f"   Token: {token_display}")
     print(f"   Media IDs: {MEDIA_IDS}")
     print(f"   Timestamp: {datetime.now().isoformat()}")
 
