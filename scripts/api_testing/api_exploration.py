@@ -2,12 +2,12 @@
 Wistia Stats API Exploration Script
 
 Run this script to test API authentication and inspect actual response shapes.
-Saves all responses to scripts/api_responses/ for reference.
+Saves all responses to scripts/api_testing/api_responses/ for reference.
 
 Usage:
     1. Create a .env file in the project root with: WISTIA_API_TOKEN=your_token_here
     2. pip install requests python-dotenv
-    3. python scripts/api_exploration.py
+    3. python scripts/api_testing/api_exploration.py
 """
 
 import os
