@@ -1,9 +1,13 @@
-# ai memory vault and agent md files
+# ai files
 context_vault/
 CLAUDE.md
+.claude/
 
 # secrets
 .env
+
+# assignment doc — contains the shared API token; keep local only
+docs/Requirement Document - Wistia Video Analytics.md
 
 # api exploration responses (may contain sensitive data)
 scripts/api_testing/api_responses/
