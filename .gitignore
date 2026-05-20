@@ -17,3 +17,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# local landing zone (mirrors future s3://bucket/landing/)
+landing/
