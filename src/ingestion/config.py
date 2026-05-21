@@ -2,6 +2,7 @@
 
 import os
 from datetime import date
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -16,6 +17,9 @@ MEDIA_IDS: list[str] = ["gskhw4w4lm", "v08dlrgr7v"]
 # Hard floor for initial backfill; prevents pulling thousands of pages of history
 # Set one month before oldest media (v08dlrgr7v created 2024-03-21)
 BACKFILL_FLOOR_DATE = date(2024, 3, 1)
+
+# Local landing-zone root (Phase 1); becomes s3://<bucket>/landing/ in Phase 2
+LANDING_ROOT = Path("landing")
 
 
 def get_api_token() -> str:
