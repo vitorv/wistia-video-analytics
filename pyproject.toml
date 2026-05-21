@@ -1,10 +1,16 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+addopts = "--cov=src --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["src"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# scripts/ holds one-off exploration tools — lint/format gates apply to pipeline code only
+extend-exclude = ["scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
@@ -12,3 +18,14 @@ select = ["E", "F", "W", "I"]
 [tool.black]
 line-length = 100
 target-version = ["py312"]
+extend-exclude = "scripts/"
+
+[tool.mypy]
+python_version = "3.12"
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false

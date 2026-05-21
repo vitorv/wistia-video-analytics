@@ -74,16 +74,18 @@ class WistiaClient:
 def _build_session(api_token: str) -> requests.Session:
     retry = Retry(
         total=5,
-        backoff_factor=1,       # delays: 1s, 2s, 4s, 8s, 16s
+        backoff_factor=1,  # delays: 1s, 2s, 4s, 8s, 16s
         status_forcelist=_RETRY_STATUSES,
         allowed_methods=["GET"],
         raise_on_status=False,  # let raise_for_status() handle final errors uniformly
     )
     session = requests.Session()
-    session.headers.update({
-        "Authorization": f"Bearer {api_token}",
-        "Accept": "application/json",
-    })
+    session.headers.update(
+        {
+            "Authorization": f"Bearer {api_token}",
+            "Accept": "application/json",
+        }
+    )
     adapter = HTTPAdapter(max_retries=retry)
     session.mount("https://", adapter)
     session.mount("http://", adapter)

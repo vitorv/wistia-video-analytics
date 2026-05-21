@@ -1,5 +1,8 @@
 -r requirements.txt
 pytest==9.0.3
+pytest-cov==7.1.0
 responses==0.26.0
+mypy==2.1.0
+types-requests==2.33.0.20260518
 ruff==0.15.13
 black==26.5.1
