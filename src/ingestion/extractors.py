@@ -28,7 +28,12 @@ def extract_events(
     pagination stops at the first event at or before that timestamp, since every
     event beyond it is older still. Returns events strictly newer than ``since``;
     with ``since=None`` returns the full available history.
+
+    Raises ``ValueError`` if ``since`` is naive (carries no timezone) — it is
+    compared against timezone-aware event timestamps.
     """
+    if since is not None and since.utcoffset() is None:
+        raise ValueError(f"since must be a timezone-aware datetime; got naive {since!r}")
     url = f"{config.BASE_URL}/stats/events"
     collected: list[dict[str, Any]] = []
     for page in client.paginate(url, params={"media_id": media_id}):

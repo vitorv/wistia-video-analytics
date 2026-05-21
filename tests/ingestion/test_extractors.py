@@ -3,6 +3,7 @@
 from datetime import date, datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 import requests
 import responses
 
@@ -94,6 +95,13 @@ def test_extract_events_sends_media_id_filter() -> None:
 def test_extract_events_empty_returns_empty_list() -> None:
     responses.get(EVENTS_URL, json=[])
     assert extract_events(WistiaClient(TOKEN), "abc") == []
+
+
+@responses.activate
+def test_extract_events_rejects_naive_since() -> None:
+    naive_since = datetime(2026, 5, 2)  # no tzinfo
+    with pytest.raises(ValueError, match="timezone-aware"):
+        extract_events(WistiaClient(TOKEN), "abc", since=naive_since)
 
 
 # ── extract_by_date ──────────────────────────────────────────────────────────
