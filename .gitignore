@@ -18,5 +18,14 @@ __pycache__/
 .venv/
 venv/
 
+# tooling caches & coverage artifacts
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
 # local landing zone (mirrors future s3://bucket/landing/)
 landing/
