@@ -38,7 +38,7 @@ def extract_events(
     collected: list[dict[str, Any]] = []
     for page in client.paginate(url, params={"media_id": media_id}):
         for event in page:
-            if since is not None and _event_timestamp(event) <= since:
+            if since is not None and event_timestamp(event) <= since:
                 logger.info(
                     "events watermark reached media_id=%s collected=%d",
                     media_id,
@@ -83,6 +83,6 @@ def extract_media_metadata(client: WistiaClient, media_id: str) -> dict[str, Any
     return metadata
 
 
-def _event_timestamp(event: dict[str, Any]) -> datetime:
+def event_timestamp(event: dict[str, Any]) -> datetime:
     """Parse an event's ``received_at`` into a timezone-aware datetime."""
     return datetime.fromisoformat(event["received_at"])

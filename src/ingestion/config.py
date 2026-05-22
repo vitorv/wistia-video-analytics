@@ -21,6 +21,9 @@ BACKFILL_FLOOR_DATE = date(2024, 3, 1)
 # Local landing-zone root (Phase 1); becomes s3://<bucket>/landing/ in Phase 2
 LANDING_ROOT = Path("landing")
 
+# Incremental watermark store (Phase 1 local JSON; → S3/DynamoDB in Phase 2)
+WATERMARK_PATH = LANDING_ROOT / "_watermark.json"
+
 
 def get_api_token() -> str:
     token = os.environ.get("WISTIA_API_TOKEN")
