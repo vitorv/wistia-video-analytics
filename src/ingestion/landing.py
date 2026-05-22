@@ -27,17 +27,19 @@ def write_landing(
 ) -> Path:
     """Write raw records to the partitioned landing zone; return the file path.
 
-    Layout: ``<root>/<endpoint>/media_id=<id>/ingest_date=<YYYY-MM-DD>/data.json``.
-    The file name is deterministic per partition, so re-running on the same day
-    overwrites the file instead of accumulating duplicates — ingestion stays
-    idempotent. ``ingest_time`` defaults to the current UTC time.
+    Layout: ``<root>/<endpoint>/media_id=<id>/ingest_date=<YYYY-MM-DD>/data_<ts>.json``.
+    The file name carries the run's UTC timestamp, so every run writes its own
+    immutable file — re-running (even within the same UTC day) never overwrites a
+    prior capture; downstream Bronze deduplicates. ``ingest_time`` defaults to the
+    current UTC time.
     """
     ingest_dt = ingest_time if ingest_time is not None else datetime.now(timezone.utc)
     ingest_date = ingest_dt.date().isoformat()
+    run_stamp = ingest_dt.strftime("%Y%m%dT%H%M%S%fZ")
 
     partition = landing_root / endpoint / f"media_id={media_id}" / f"ingest_date={ingest_date}"
     partition.mkdir(parents=True, exist_ok=True)
-    file_path = partition / "data.json"
+    file_path = partition / f"data_{run_stamp}.json"
 
     envelope = {
         "ingestion_metadata": {

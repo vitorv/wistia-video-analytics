@@ -3,6 +3,7 @@
 import json
 import logging
 import sys
+from datetime import datetime, timezone
 
 from src.ingestion.errors import WistiaError
 from src.ingestion.pipeline import run
@@ -14,8 +15,9 @@ class _JsonFormatter(logging.Formatter):
     """Render log records as single-line JSON, ready for CloudWatch Logs Insights."""
 
     def format(self, record: logging.LogRecord) -> str:
+        created = datetime.fromtimestamp(record.created, tz=timezone.utc)
         payload = {
-            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "ts": created.strftime("%Y-%m-%dT%H:%M:%SZ"),  # UTC, matches the data
             "level": record.levelname,
             "logger": record.name,
             "msg": record.getMessage(),

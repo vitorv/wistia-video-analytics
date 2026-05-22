@@ -23,6 +23,7 @@ def test_json_formatter_renders_record_as_json() -> None:
     assert parsed["level"] == "INFO"
     assert parsed["logger"] == "src.ingestion.demo"
     assert parsed["msg"] == "count=7"
+    assert "ts" in parsed
 
 
 def test_configure_logging_installs_json_formatter() -> None:

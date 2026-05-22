@@ -17,8 +17,8 @@ def test_write_landing_creates_partitioned_path(tmp_path: Path) -> None:
         landing_root=tmp_path,
         ingest_time=ts,
     )
-    expected = tmp_path / "events" / "media_id=gskhw4w4lm" / "ingest_date=2026-05-21" / "data.json"
-    assert path == expected
+    assert path.parent == (tmp_path / "events" / "media_id=gskhw4w4lm" / "ingest_date=2026-05-21")
+    assert path.name.startswith("data_") and path.name.endswith(".json")
     assert path.is_file()
 
 
@@ -40,16 +40,28 @@ def test_write_landing_stores_raw_records_and_metadata(tmp_path: Path) -> None:
     assert meta["record_count"] == 2
 
 
-def test_write_landing_same_day_rerun_overwrites(tmp_path: Path) -> None:
-    ts = datetime(2026, 5, 21, tzinfo=timezone.utc)
-    write_landing("by_date", "abc", [{"date": "2026-05-20"}], landing_root=tmp_path, ingest_time=ts)
-    path = write_landing(
-        "by_date", "abc", [{"date": "2026-05-21"}], landing_root=tmp_path, ingest_time=ts
+def test_write_landing_distinct_runs_keep_separate_files(tmp_path: Path) -> None:
+    run1 = write_landing(
+        "by_date",
+        "abc",
+        [{"date": "2026-05-20"}],
+        landing_root=tmp_path,
+        ingest_time=datetime(2026, 5, 21, 9, 0, 0, tzinfo=timezone.utc),
+    )
+    run2 = write_landing(
+        "by_date",
+        "abc",
+        [{"date": "2026-05-21"}],
+        landing_root=tmp_path,
+        ingest_time=datetime(2026, 5, 21, 15, 30, 0, tzinfo=timezone.utc),
     )
 
-    assert list(path.parent.iterdir()) == [path]  # one file — re-run overwrote
-    content = json.loads(path.read_text(encoding="utf-8"))
-    assert content["records"] == [{"date": "2026-05-21"}]
+    # both runs land on 2026-05-21 — same partition, distinct immutable files
+    assert run1 != run2
+    assert run1.parent == run2.parent
+    assert sorted(run1.parent.iterdir()) == sorted([run1, run2])
+    assert json.loads(run1.read_text(encoding="utf-8"))["records"] == [{"date": "2026-05-20"}]
+    assert json.loads(run2.read_text(encoding="utf-8"))["records"] == [{"date": "2026-05-21"}]
 
 
 def test_write_landing_empty_records(tmp_path: Path) -> None:
