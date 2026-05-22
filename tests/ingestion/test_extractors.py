@@ -1,6 +1,8 @@
 """Tests for the per-endpoint extractors. HTTP is mocked with ``responses``."""
 
+from collections.abc import Callable
 from datetime import date, datetime, timezone
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -127,3 +129,48 @@ def test_extract_media_metadata_returns_dict() -> None:
     responses.get(url, json={"hashed_id": "abc", "name": "Demo Video"})
     metadata = extract_media_metadata(WistiaClient(TOKEN), "abc")
     assert metadata == {"hashed_id": "abc", "name": "Demo Video"}
+
+
+# ── fixture-based shape tests (sanitized real API response shapes) ────────────
+
+
+@responses.activate
+def test_extract_events_handles_full_record_shape(
+    load_fixture: Callable[[str], Any],
+) -> None:
+    page = load_fixture("events_page.json")  # 3 events, newest-first
+    responses.get(EVENTS_URL, json=page)
+    # cutoff falls between event 2 (13:30) and event 3 (11:15)
+    since = datetime(2026, 5, 19, 12, 0, tzinfo=timezone.utc)
+    events = extract_events(WistiaClient(TOKEN), "gskhw4w4lm", since=since)
+    # watermark cutoff works on the real ".000Z" received_at format
+    assert len(events) == 2
+    # the full nested record shape survives the pull intact
+    assert events[0]["user_agent_details"]["browser"] == "Chrome"
+    assert events[0]["thumbnail"]["type"] == "StillImageFile"
+
+
+@responses.activate
+def test_extract_by_date_handles_full_record_shape(
+    load_fixture: Callable[[str], Any],
+) -> None:
+    rows = load_fixture("by_date.json")
+    url = f"{config.BASE_URL}/stats/medias/gskhw4w4lm/by_date"
+    responses.get(url, json=rows)
+    result = extract_by_date(
+        WistiaClient(TOKEN), "gskhw4w4lm", date(2026, 5, 18), date(2026, 5, 20)
+    )
+    assert result == rows
+    assert {"date", "load_count", "play_count", "hours_watched"} <= result[0].keys()
+
+
+@responses.activate
+def test_extract_media_metadata_handles_full_record_shape(
+    load_fixture: Callable[[str], Any],
+) -> None:
+    meta = load_fixture("media_metadata.json")
+    responses.get(f"{config.BASE_URL}/medias/gskhw4w4lm", json=meta)
+    result = extract_media_metadata(WistiaClient(TOKEN), "gskhw4w4lm")
+    assert result == meta
+    # fields the Gold dim_media is derived from
+    assert {"hashed_id", "name", "created"} <= result.keys()

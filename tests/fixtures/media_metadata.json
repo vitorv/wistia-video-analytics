@@ -1,0 +1,44 @@
+{
+  "id": 11111111,
+  "hashed_id": "gskhw4w4lm",
+  "progress": 1.0,
+  "type": "Video",
+  "archived": false,
+  "name": "Sample VSL Youtube Paid Ads",
+  "duration": 435.456,
+  "created": "2025-01-13T00:31:55+00:00",
+  "updated": "2025-05-01T14:46:32+00:00",
+  "description": "",
+  "protected": null,
+  "status": "ready",
+  "thumbnail": {
+    "url": "https://example.com/thumbnail.jpg",
+    "width": 200,
+    "height": 120
+  },
+  "section": "Sample Section",
+  "subfolder": {
+    "hashed_id": "0000000000",
+    "position": 1,
+    "description": "Sample subfolder description",
+    "name": "Sample Subfolder",
+    "created": "2025-01-13T00:24:23+00:00",
+    "updated": "2025-12-27T02:54:10+00:00"
+  },
+  "tags": [],
+  "assets": [
+    {
+      "width": 1920,
+      "height": 1080,
+      "type": "OriginalFile",
+      "file_size": 88985020,
+      "content_type": "video/mp4",
+      "url": "https://example.com/asset.bin"
+    }
+  ],
+  "folder": {
+    "id": 22222222,
+    "hashed_id": "1111111111",
+    "name": "Sample Folder"
+  }
+}

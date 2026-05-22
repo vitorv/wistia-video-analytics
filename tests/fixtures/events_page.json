@@ -1,0 +1,107 @@
+[
+  {
+    "received_at": "2026-05-19T14:00:00.000Z",
+    "event_key": "evt_000000000000000000000001",
+    "ip": "192.0.2.10",
+    "country": "ZZ",
+    "region": "Test Region",
+    "city": "Testville",
+    "lat": 1.2345,
+    "lon": 6.789,
+    "org": "Example ISP",
+    "email": null,
+    "percent_viewed": 0.8123,
+    "embed_url": "https://example.com/",
+    "conversion_type": "",
+    "conversion_data": {},
+    "iframe_heatmap_url": "https://api.wistia.com/modern/stats/events/evt_000000000000000000000001/iframe.html",
+    "visitor_key": "vis_000000000000000000000001",
+    "user_agent_details": {
+      "browser": "Chrome",
+      "browser_version": "120",
+      "platform": "Windows",
+      "mobile": false
+    },
+    "media_id": "gskhw4w4lm",
+    "media_name": "Sample VSL Youtube Paid Ads",
+    "media_url": "https://example.wistia.com/medias/gskhw4w4lm",
+    "thumbnail": {
+      "url": "https://example.com/thumbnail.jpg",
+      "width": 1280,
+      "height": 720,
+      "fileSize": 100000,
+      "contentType": "image/jpg",
+      "type": "StillImageFile"
+    }
+  },
+  {
+    "received_at": "2026-05-19T13:30:00.000Z",
+    "event_key": "evt_000000000000000000000002",
+    "ip": "198.51.100.23",
+    "country": "ZZ",
+    "region": "Test Region",
+    "city": "Testville",
+    "lat": 1.2345,
+    "lon": 6.789,
+    "org": "Example ISP",
+    "email": null,
+    "percent_viewed": 0.4567,
+    "embed_url": "https://example.com/",
+    "conversion_type": "",
+    "conversion_data": {},
+    "iframe_heatmap_url": "https://api.wistia.com/modern/stats/events/evt_000000000000000000000002/iframe.html",
+    "visitor_key": "vis_000000000000000000000001",
+    "user_agent_details": {
+      "browser": "Chrome",
+      "browser_version": "120",
+      "platform": "Windows",
+      "mobile": false
+    },
+    "media_id": "gskhw4w4lm",
+    "media_name": "Sample VSL Youtube Paid Ads",
+    "media_url": "https://example.wistia.com/medias/gskhw4w4lm",
+    "thumbnail": {
+      "url": "https://example.com/thumbnail.jpg",
+      "width": 1280,
+      "height": 720,
+      "fileSize": 100000,
+      "contentType": "image/jpg",
+      "type": "StillImageFile"
+    }
+  },
+  {
+    "received_at": "2026-05-19T11:15:00.000Z",
+    "event_key": "evt_000000000000000000000003",
+    "ip": "203.0.113.5",
+    "country": "ZZ",
+    "region": "Test Region",
+    "city": "Testville",
+    "lat": 1.2345,
+    "lon": 6.789,
+    "org": "Example ISP",
+    "email": null,
+    "percent_viewed": 0.0512,
+    "embed_url": "https://example.com/",
+    "conversion_type": "",
+    "conversion_data": {},
+    "iframe_heatmap_url": "https://api.wistia.com/modern/stats/events/evt_000000000000000000000003/iframe.html",
+    "visitor_key": "vis_000000000000000000000002",
+    "user_agent_details": {
+      "browser": "Safari",
+      "browser_version": "17",
+      "platform": "iOS (iPhone)",
+      "mobile": true
+    },
+    "media_id": "gskhw4w4lm",
+    "media_name": "Sample VSL Youtube Paid Ads",
+    "media_url": "https://example.wistia.com/medias/gskhw4w4lm",
+    "thumbnail": {
+      "url": "https://example.com/thumbnail.jpg",
+      "width": 1280,
+      "height": 720,
+      "fileSize": 100000,
+      "contentType": "image/jpg",
+      "type": "StillImageFile"
+    }
+  }
+]
