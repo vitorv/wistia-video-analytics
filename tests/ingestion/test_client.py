@@ -6,6 +6,7 @@ patches over; that loop cannot be exercised here, so the retry *policy* is
 verified by introspection instead (see ``test_retry_policy_is_configured``).
 """
 
+import logging
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -15,6 +16,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from src.ingestion.client import WistiaClient
+from src.ingestion.errors import WistiaAPIError, WistiaAuthError, WistiaNotFoundError
 
 BASE = "https://api.wistia.com/modern"
 TOKEN = "test-token"  # noqa: S105 — dummy value, not a real secret
@@ -40,17 +42,39 @@ def test_get_sends_bearer_auth_header() -> None:
 
 
 @responses.activate
-def test_get_raises_on_404() -> None:
+def test_get_raises_not_found_on_404() -> None:
     responses.get(f"{BASE}/medias/missing", status=404)
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(WistiaNotFoundError):
         WistiaClient(TOKEN).get(f"{BASE}/medias/missing")
 
 
 @responses.activate
-def test_get_raises_on_401() -> None:
+def test_get_raises_auth_error_on_401() -> None:
     responses.get(f"{BASE}/medias/abc", status=401)
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(WistiaAuthError):
         WistiaClient(TOKEN).get(f"{BASE}/medias/abc")
+
+
+@responses.activate
+def test_get_raises_api_error_on_server_error() -> None:
+    responses.get(f"{BASE}/medias/abc", status=503)
+    with pytest.raises(WistiaAPIError):
+        WistiaClient(TOKEN).get(f"{BASE}/medias/abc")
+
+
+@responses.activate
+def test_get_raises_api_error_on_connection_failure() -> None:
+    responses.get(f"{BASE}/medias/abc", body=requests.ConnectionError("boom"))
+    with pytest.raises(WistiaAPIError):
+        WistiaClient(TOKEN).get(f"{BASE}/medias/abc")
+
+
+@responses.activate
+def test_failure_emits_error_log(caplog: pytest.LogCaptureFixture) -> None:
+    responses.get(f"{BASE}/medias/abc", status=500)
+    with caplog.at_level(logging.ERROR), pytest.raises(WistiaAPIError):
+        WistiaClient(TOKEN).get(f"{BASE}/medias/abc")
+    assert any(record.levelno == logging.ERROR for record in caplog.records)
 
 
 @responses.activate

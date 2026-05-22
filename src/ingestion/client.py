@@ -9,6 +9,12 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from src.ingestion import config
+from src.ingestion.errors import (
+    WistiaAPIError,
+    WistiaAuthError,
+    WistiaError,
+    WistiaNotFoundError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +47,9 @@ class WistiaClient:
     # ── HTTP helpers ───────────────────────────────────────────────────────────
 
     def get(self, url: str, params: dict[str, Any] | None = None) -> Any:
-        """GET a single resource. Raises HTTPError on 4xx/5xx after retries exhaust."""
+        """GET a single resource, returning parsed JSON. Raises a WistiaError on failure."""
         logger.info("GET %s params=%s", url, params)
-        resp = self._session.get(url, params=params, timeout=self._timeout)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request(url, params).json()
 
     def paginate(
         self,
@@ -56,12 +60,7 @@ class WistiaClient:
         base_params = dict(params or {})
         page = 1
         while True:
-            resp = self._session.get(
-                url,
-                params={**base_params, "page": page},
-                timeout=self._timeout,
-            )
-            resp.raise_for_status()
+            resp = self._request(url, {**base_params, "page": page})
             records: list[dict[str, Any]] = resp.json()
             if not records:
                 logger.info("pagination complete url=%s total_pages=%d", url, page - 1)
@@ -69,6 +68,18 @@ class WistiaClient:
             logger.info("fetched page=%d records=%d url=%s", page, len(records), url)
             yield records
             page += 1
+
+    def _request(self, url: str, params: dict[str, Any] | None) -> requests.Response:
+        """Perform a GET, translating any failure into a WistiaError."""
+        try:
+            resp = self._session.get(url, params=params, timeout=self._timeout)
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            raise _translate_http_error(exc, url) from exc
+        except requests.RequestException as exc:
+            logger.error("request failed url=%s error=%s", url, exc)
+            raise WistiaAPIError(f"request to {url} failed: {exc}") from exc
+        return resp
 
 
 def _build_session(api_token: str) -> requests.Session:
@@ -90,3 +101,14 @@ def _build_session(api_token: str) -> requests.Session:
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
+
+
+def _translate_http_error(exc: requests.HTTPError, url: str) -> WistiaError:
+    """Map an HTTP error response to the appropriate WistiaError subclass."""
+    status = exc.response.status_code if exc.response is not None else None
+    logger.error("HTTP error url=%s status=%s", url, status)
+    if status == 401:
+        return WistiaAuthError("authentication failed (401) — check WISTIA_API_TOKEN")
+    if status == 404:
+        return WistiaNotFoundError(f"resource not found (404): {url}")
+    return WistiaAPIError(f"unexpected HTTP {status} from {url}")
