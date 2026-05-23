@@ -29,3 +29,11 @@ coverage.xml
 
 # local landing zone (mirrors future s3://bucket/landing/)
 landing/
+
+# medallion layer outputs (mirror future s3://bucket/<layer>/)
+bronze/
+silver/
+gold/
+
+# vendored Hadoop native binaries for local Spark on Windows (see README)
+vendor/
