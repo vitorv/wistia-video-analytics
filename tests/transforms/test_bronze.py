@@ -4,7 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from pyspark.sql import SparkSession
+from pyspark.sql import Row, SparkSession
 
 from src.ingestion.landing import write_landing
 from src.transforms.bronze import run_bronze, to_bronze
@@ -39,7 +39,9 @@ def _envelope(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def test_to_bronze_explodes_records_with_lineage(spark: SparkSession) -> None:
-    df = spark.createDataFrame([_envelope([_EVENT, _EVENT])], schema=ENVELOPE_SCHEMAS["events"])
+    df = spark.createDataFrame(
+        [Row(**_envelope([_EVENT, _EVENT]))], schema=ENVELOPE_SCHEMAS["events"]
+    )
 
     bronze = to_bronze(df)
 
@@ -52,7 +54,7 @@ def test_to_bronze_explodes_records_with_lineage(spark: SparkSession) -> None:
 
 
 def test_to_bronze_empty_records_yields_no_rows(spark: SparkSession) -> None:
-    df = spark.createDataFrame([_envelope([])], schema=ENVELOPE_SCHEMAS["events"])
+    df = spark.createDataFrame([Row(**_envelope([]))], schema=ENVELOPE_SCHEMAS["events"])
 
     assert to_bronze(df).count() == 0
 
@@ -100,7 +102,7 @@ def test_to_bronze_by_date_carries_media_id_from_metadata(spark: SparkSession) -
             {"date": "2026-05-19", "load_count": 12, "play_count": 8, "hours_watched": 0.95},
         ],
     }
-    df = spark.createDataFrame([envelope], schema=ENVELOPE_SCHEMAS["by_date"])
+    df = spark.createDataFrame([Row(**envelope)], schema=ENVELOPE_SCHEMAS["by_date"])
 
     bronze = to_bronze(df)
 
