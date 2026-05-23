@@ -81,3 +81,30 @@ def test_run_bronze_end_to_end(
     assert {"ingest_timestamp", "ingest_date"}.issubset(set(events.columns))
     media_ids = {r["media_id"] for r in events.select("media_id").collect()}
     assert media_ids == {"gskhw4w4lm"}
+
+
+def test_to_bronze_by_date_carries_media_id_from_metadata(spark: SparkSession) -> None:
+    # by_date records carry no media_id in the API response; Bronze must source
+    # it from ingestion_metadata.media_id so the column is consistent across
+    # endpoints and by_date rows still have the join key Gold needs.
+    # Regression guard for the design oversight discovered during WS4.
+    envelope = {
+        "ingestion_metadata": {
+            "endpoint": "by_date",
+            "media_id": "from_metadata",
+            "ingest_timestamp": "2026-05-22T10:00:00+00:00",
+            "ingest_date": "2026-05-22",
+            "record_count": 1,
+        },
+        "records": [
+            {"date": "2026-05-19", "load_count": 12, "play_count": 8, "hours_watched": 0.95},
+        ],
+    }
+    df = spark.createDataFrame([envelope], schema=ENVELOPE_SCHEMAS["by_date"])
+
+    bronze = to_bronze(df)
+
+    assert "media_id" in bronze.columns
+    row = bronze.first()
+    assert row is not None
+    assert row["media_id"] == "from_metadata"

@@ -22,15 +22,19 @@ def to_bronze(envelopes: DataFrame) -> DataFrame:
     """Flatten landing envelopes into one Bronze row per raw record.
 
     Each input row is one landing envelope (an ``ingestion_metadata`` header plus
-    a ``records`` array). The records are exploded to one row each, carrying two
-    lineage columns copied from the header: ``ingest_timestamp`` and
-    ``ingest_date``. Envelopes with an empty ``records`` array contribute no rows.
+    a ``records`` array). The records are exploded to one row each, carrying
+    three lineage columns copied from the header: ``ingest_timestamp``,
+    ``ingest_date``, and ``media_id``. ``media_id`` comes from the metadata
+    rather than the record so every endpoint — including ``by_date``, whose
+    records carry no media_id at all — has a consistent column downstream.
+    Envelopes with an empty ``records`` array contribute no rows.
     """
     return envelopes.select(
         F.col("ingestion_metadata.ingest_timestamp").alias("ingest_timestamp"),
         F.col("ingestion_metadata.ingest_date").alias("ingest_date"),
+        F.col("ingestion_metadata.media_id").alias("media_id"),
         F.explode("records").alias("record"),
-    ).select("record.*", "ingest_timestamp", "ingest_date")
+    ).select("record.*", "ingest_timestamp", "ingest_date", "media_id")
 
 
 def read_landing(spark: SparkSession, endpoint: str, landing_root: Path) -> DataFrame:

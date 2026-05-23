@@ -40,7 +40,10 @@ EVENTS_RECORD_SCHEMA = StructType(
         StructField("percent_viewed", DoubleType()),
         StructField("conversion_type", StringType()),
         StructField("visitor_key", StringType()),
-        StructField("media_id", StringType()),
+        # ``media_id`` is intentionally NOT declared here. Bronze sources it
+        # uniformly from ``ingestion_metadata.media_id`` so every endpoint —
+        # including ``by_date``, whose records carry no media_id at all — has
+        # a consistent ``media_id`` column downstream.
         StructField("media_name", StringType()),
         StructField("media_url", StringType()),
     ]
