@@ -46,14 +46,14 @@ def main() -> None:
     c4.metric("Total watch hours", f"{summary['total_watch_hours']:.2f}")
 
     st.subheader("Engagement by media")
-    st.dataframe(data.engagement_by_media(fact, dim_media), use_container_width=True)
+    st.dataframe(data.engagement_by_media(fact, dim_media), width="stretch")
 
     st.subheader("Daily trends")
     trends = data.daily_trends(fact)
     st.line_chart(trends, x="date", y="plays", color="media_id")
 
     st.subheader("Top visitors")
-    st.dataframe(data.top_visitors(fact, dim_visitor, n=10), use_container_width=True)
+    st.dataframe(data.top_visitors(fact, dim_visitor, n=10), width="stretch")
 
 
 main()
