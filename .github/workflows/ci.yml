@@ -15,11 +15,20 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
+            requirements-dashboard.txt
+
+      # PySpark transform tests need a JVM. Temurin 17 matches AWS Glue 5.0's
+      # supported JDK line; Spark 3.5 officially supports through Java 17.
+      - name: Set up Java (Temurin 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
 
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
