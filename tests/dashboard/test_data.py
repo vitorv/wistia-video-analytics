@@ -1,5 +1,6 @@
 """Tests for src.dashboard.data."""
 
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -10,6 +11,8 @@ from src.dashboard.data import (
     engagement_by_media,
     kpi_summary,
     load_gold,
+    monthly_engagement,
+    recent_engagement,
     top_visitors,
 )
 
@@ -74,14 +77,29 @@ def test_engagement_by_media(fact: pd.DataFrame, dim_media: pd.DataFrame) -> Non
     assert list(result["channel"]) == ["Youtube", "Facebook"]
 
 
-def test_daily_trends_dedupes_denormalized_metrics(fact: pd.DataFrame) -> None:
+def test_daily_trends_fills_missing_dates_and_dedupes(fact: pd.DataFrame) -> None:
     result = daily_trends(fact)
-    assert len(result) == 2  # 2 distinct (media_id, date) groups
-    m1_row = result.loc[result["media_id"] == "m1"].iloc[0]
-    assert m1_row["plays"] == 3  # 2 + 1
-    # play_rate / total_watch_time are denormalized -> "first" gives the single value
-    assert m1_row["play_rate"] == 0.8
-    assert m1_row["total_watch_time"] == 1.5
+    # Fixture: m1 had events only on 2026-05-19; m2 only on 2026-05-20.
+    # daily_trends fills the full (media x date) grid with plays=0 for the
+    # missing combos and dedupes the denormalized play_rate / total_watch_time
+    # via "first".
+    assert len(result) == 4  # 2 media x 2 dates in range
+    m1_19 = result[(result["media_id"] == "m1") & (result["date"] == date(2026, 5, 19))].iloc[0]
+    assert m1_19["plays"] == 3  # 2 + 1
+    assert m1_19["play_rate"] == 0.8
+    assert m1_19["total_watch_time"] == 1.5
+    # m1 had no events on 2026-05-20 -> filled with plays=0; denormalized
+    # fields stay null (no by_date contribution for the filled day)
+    m1_20 = result[(result["media_id"] == "m1") & (result["date"] == date(2026, 5, 20))].iloc[0]
+    assert m1_20["plays"] == 0
+    assert pd.isna(m1_20["play_rate"])
+
+
+def test_daily_trends_empty_fact_returns_empty() -> None:
+    empty = pd.DataFrame(
+        columns=["media_id", "date", "play_count", "play_rate", "total_watch_time"]
+    )
+    assert daily_trends(empty).empty
 
 
 def test_top_visitors_ranks_and_enriches(fact: pd.DataFrame, dim_visitor: pd.DataFrame) -> None:
@@ -120,3 +138,59 @@ def test_load_gold_reads_all_three_tables(
     assert len(loaded["dim_media"]) == 2
     assert len(loaded["dim_visitor"]) == 2
     assert len(loaded["fact_media_engagement"]) == 3
+
+
+def test_monthly_engagement_aggregates_per_month(
+    fact: pd.DataFrame, dim_media: pd.DataFrame
+) -> None:
+    result = monthly_engagement(fact, dim_media)
+    # Fixture dates all in May 2026 -> one (media, month) group per media.
+    assert len(result) == 2
+    by_key = {(r["media_id"], r["month"]): r for r in result.to_dict("records")}
+    assert by_key[("m1", "2026-05")]["plays"] == 3  # 2 + 1
+    assert by_key[("m1", "2026-05")]["unique_visitors"] == 2
+    assert by_key[("m1", "2026-05")]["channel"] == "Youtube"
+    assert by_key[("m2", "2026-05")]["plays"] == 3
+    assert by_key[("m2", "2026-05")]["unique_visitors"] == 1
+    assert by_key[("m2", "2026-05")]["channel"] == "Facebook"
+
+
+def test_recent_engagement_filters_to_anchor_window(
+    fact: pd.DataFrame, dim_media: pd.DataFrame
+) -> None:
+    # Fixture: m1 on 2026-05-19, m2 on 2026-05-20. Anchor = max = 2026-05-20.
+    # days=1 -> only 2026-05-20 in window -> only m2 in result.
+    result = recent_engagement(fact, dim_media, days=1)
+    assert list(result["media_id"]) == ["m2"]
+    assert result.iloc[0]["plays"] == 3
+    assert result.iloc[0]["active_days"] == 1
+    assert result.iloc[0]["channel"] == "Facebook"
+    # days=2 -> both dates in window -> both media.
+    result2 = recent_engagement(fact, dim_media, days=2)
+    assert set(result2["media_id"]) == {"m1", "m2"}
+
+
+def test_recent_engagement_empty_fact_returns_empty_with_schema() -> None:
+    empty_fact = pd.DataFrame(
+        columns=[
+            "media_id",
+            "visitor_id",
+            "date",
+            "play_count",
+            "watched_percent",
+            "play_rate",
+            "total_watch_time",
+        ]
+    )
+    empty_dim = pd.DataFrame(columns=["media_id", "title", "channel"])
+    result = recent_engagement(empty_fact, empty_dim, days=7)
+    assert result.empty
+    assert set(result.columns) == {
+        "media_id",
+        "title",
+        "channel",
+        "plays",
+        "unique_visitors",
+        "active_days",
+        "avg_watched_percent",
+    }

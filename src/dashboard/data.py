@@ -56,17 +56,84 @@ def daily_trends(fact: pd.DataFrame) -> pd.DataFrame:
     ``play_rate`` and ``total_watch_time`` are denormalized at the media+date
     grain — they have the same value across every visitor row for that group.
     ``"first"`` returns that single value without averaging.
+
+    Days with zero engagement are filled with ``plays = 0`` so the dashboard's
+    line chart shows real zeros instead of straight-line gaps across the dead
+    stretches. ``play_rate`` and ``total_watch_time`` stay null on filled rows
+    (they have no by_date contribution by definition).
     """
-    return (
-        fact.groupby(["media_id", "date"], as_index=False)
+    media_day = fact.groupby(["media_id", "date"], as_index=False).agg(
+        plays=("play_count", "sum"),
+        play_rate=("play_rate", "first"),
+        total_watch_time=("total_watch_time", "first"),
+    )
+    if media_day.empty:
+        return media_day
+    # Normalize date to ``datetime.date`` so reindex/merge keys align whether
+    # the input came from Spark Parquet (date) or a test fixture (string).
+    media_day["date"] = pd.to_datetime(media_day["date"]).dt.date
+    full_grid = pd.MultiIndex.from_product(
+        [
+            media_day["media_id"].unique(),
+            pd.date_range(media_day["date"].min(), media_day["date"].max(), freq="D").date,
+        ],
+        names=["media_id", "date"],
+    ).to_frame(index=False)
+    result = full_grid.merge(media_day, on=["media_id", "date"], how="left")
+    result["plays"] = result["plays"].fillna(0).astype(int)
+    return result.sort_values(["media_id", "date"]).reset_index(drop=True)
+
+
+def monthly_engagement(fact: pd.DataFrame, dim_media: pd.DataFrame) -> pd.DataFrame:
+    """Per-(media, month) summary — plays, unique visitors, avg watched %.
+
+    Aggregates the fact to the calendar month for long-term trend tables.
+    Joins ``dim_media`` so the table can show ``title`` and ``channel`` next
+    to each media row.
+    """
+    monthly = (
+        fact.assign(month=pd.to_datetime(fact["date"]).dt.to_period("M").astype(str))
+        .groupby(["media_id", "month"], as_index=False)
         .agg(
             plays=("play_count", "sum"),
-            play_rate=("play_rate", "first"),
-            total_watch_time=("total_watch_time", "first"),
+            unique_visitors=("visitor_id", "nunique"),
+            avg_watched_percent=("watched_percent", "mean"),
         )
-        .sort_values("date")
-        .reset_index(drop=True)
     )
+    return monthly.merge(dim_media[["media_id", "title", "channel"]], on="media_id", how="left")
+
+
+def recent_engagement(fact: pd.DataFrame, dim_media: pd.DataFrame, days: int) -> pd.DataFrame:
+    """Per-media engagement summary for the most recent ``days`` of fact data.
+
+    The window is anchored at ``max(fact.date)`` (the newest date in the data)
+    rather than "today" so the table is meaningful even when the dataset is
+    back-filled or stale. In a steady-state production run with daily
+    ingestion the anchor equals today.
+    """
+    output_cols = [
+        "media_id",
+        "title",
+        "channel",
+        "plays",
+        "unique_visitors",
+        "active_days",
+        "avg_watched_percent",
+    ]
+    if fact.empty:
+        return pd.DataFrame(columns=output_cols)
+    dates = pd.to_datetime(fact["date"])
+    cutoff = dates.max() - pd.Timedelta(days=days - 1)
+    recent = fact[dates >= cutoff]
+    agg = recent.groupby("media_id", as_index=False).agg(
+        plays=("play_count", "sum"),
+        unique_visitors=("visitor_id", "nunique"),
+        active_days=("date", "nunique"),
+        avg_watched_percent=("watched_percent", "mean"),
+    )
+    return agg.merge(dim_media[["media_id", "title", "channel"]], on="media_id", how="left")[
+        output_cols
+    ]
 
 
 def top_visitors(fact: pd.DataFrame, dim_visitor: pd.DataFrame, n: int = 10) -> pd.DataFrame:

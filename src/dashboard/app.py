@@ -45,15 +45,66 @@ def main() -> None:
     c3.metric("Avg watched %", f"{summary['avg_watched_percent']:.1%}")
     c4.metric("Total watch hours", f"{summary['total_watch_hours']:.2f}")
 
+    # Shared column config: display avg_watched_percent as a one-decimal
+    # percentage (the underlying column is a 0..1 fraction; the table-building
+    # blocks below multiply by 100 before formatting).
+    percent_col = st.column_config.NumberColumn(format="%.1f%%")
+
+    st.subheader("Last 7 days")
+    last_week = data.recent_engagement(fact, dim_media, days=7).assign(
+        avg_watched_percent=lambda d: d["avg_watched_percent"] * 100
+    )
+    st.dataframe(
+        last_week,
+        width="stretch",
+        column_config={"avg_watched_percent": percent_col},
+    )
+
+    st.subheader("Last 30 days")
+    last_month = data.recent_engagement(fact, dim_media, days=30).assign(
+        avg_watched_percent=lambda d: d["avg_watched_percent"] * 100
+    )
+    st.dataframe(
+        last_month,
+        width="stretch",
+        column_config={"avg_watched_percent": percent_col},
+    )
+
     st.subheader("Engagement by media")
-    st.dataframe(data.engagement_by_media(fact, dim_media), width="stretch")
+    eng = data.engagement_by_media(fact, dim_media).assign(
+        avg_watched_percent=lambda d: d["avg_watched_percent"] * 100
+    )
+    st.dataframe(
+        eng,
+        width="stretch",
+        column_config={"avg_watched_percent": percent_col},
+    )
 
     st.subheader("Daily trends")
-    trends = data.daily_trends(fact)
-    st.line_chart(trends, x="date", y="plays", color="media_id")
+    trends = data.daily_trends(fact).merge(
+        dim_media[["media_id", "channel"]], on="media_id", how="left"
+    )
+    st.line_chart(trends, x="date", y="plays", color="channel")
+
+    st.subheader("Monthly engagement")
+    monthly = data.monthly_engagement(fact, dim_media).assign(
+        avg_watched_percent=lambda d: d["avg_watched_percent"] * 100
+    )
+    st.dataframe(
+        monthly,
+        width="stretch",
+        column_config={"avg_watched_percent": percent_col},
+    )
 
     st.subheader("Top visitors")
-    st.dataframe(data.top_visitors(fact, dim_visitor, n=10), width="stretch")
+    top = data.top_visitors(fact, dim_visitor, n=10).assign(
+        avg_watched_percent=lambda d: d["avg_watched_percent"] * 100
+    )
+    st.dataframe(
+        top,
+        width="stretch",
+        column_config={"avg_watched_percent": percent_col},
+    )
 
 
 main()
