@@ -1,8 +1,17 @@
 -r requirements.txt
+-r requirements-dashboard.txt
+
+# PySpark transforms — installed locally and in CI for development and tests.
+# In Phase 3, AWS Glue provides Spark at runtime, so this is not a Lambda/Glue
+# deployment dependency. Pinned to the 3.5.x line to match AWS Glue 5.0.
+pyspark==3.5.8
+
+# testing & quality gates
 pytest==9.0.3
 pytest-cov==7.1.0
 responses==0.26.0
 mypy==2.1.0
 types-requests==2.33.0.20260518
+pandas-stubs==3.0.0.260204
 ruff==0.15.13
 black==26.5.1

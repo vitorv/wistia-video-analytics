@@ -1,0 +1,6 @@
+# Streamlit dashboard runtime dependencies.
+# Phase 2: installed locally to run the dashboard. Phase 3: these become the
+# dependencies baked into the dashboard's Docker image.
+streamlit==1.57.0
+pandas==3.0.3
+pyarrow==24.0.0
