@@ -37,3 +37,6 @@ gold/
 
 # vendored Hadoop native binaries for local Spark on Windows (see README)
 vendor/
+
+# Lambda packaging artifacts (zip + staging tree built by infra/scripts/package-lambda.ps1)
+build/
