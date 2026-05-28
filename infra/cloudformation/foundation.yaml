@@ -1,0 +1,106 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: |
+  Wistia Phase 3 — Foundation stack.
+  Creates the two S3 buckets all downstream stacks depend on:
+    - Data lake bucket (landing/, bronze/, silver/, gold/, state/ prefixes)
+    - Artifacts bucket (Lambda zips, Glue PySpark scripts)
+  No compute resources. Service-specific IAM roles live in the stacks that
+  use them (Lambda role in ingest.yaml, Glue role in transforms.yaml, etc).
+
+Parameters:
+  Env:
+    Type: String
+    Default: prod
+    AllowedValues:
+      - dev
+      - prod
+    Description: Deployment environment. Drives the Export name suffix.
+
+Resources:
+
+  # =========================================================================
+  # Data lake bucket — all pipeline data lives here under prefixes:
+  #   landing/   bronze/   silver/   gold/   state/
+  # =========================================================================
+  DataLakeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub wistia-datalake-${AWS::AccountId}-${AWS::Region}
+      VersioningConfiguration:
+        # Versioning is overkill for this project — Bronze keeps schema-stamped
+        # history already and re-running the pipeline overwrites layers cleanly.
+        Status: Suspended
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256        # SSE-S3 (free, default for new buckets)
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: foundation
+
+  # =========================================================================
+  # Artifacts bucket — deployment artifacts only (Lambda zips, Glue scripts).
+  # Separate from the data lake so deploy-time code is policy-isolated from
+  # runtime data, and the data lake can be emptied without nuking artifacts.
+  # =========================================================================
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub wistia-artifacts-${AWS::AccountId}-${AWS::Region}
+      VersioningConfiguration:
+        Status: Suspended
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: foundation
+
+Outputs:
+
+  # Exports are consumed by downstream stacks via !ImportValue.
+  # The Env suffix lets dev + prod stacks coexist in the same account.
+
+  DataLakeBucketName:
+    Description: Name of the data lake bucket. Used by ingest/transform/dashboard stacks.
+    Value: !Ref DataLakeBucket
+    Export:
+      Name: !Sub wistia-${Env}-datalake-bucket
+
+  DataLakeBucketArn:
+    Description: ARN of the data lake bucket. Used in IAM policies that need bucket-scope.
+    Value: !GetAtt DataLakeBucket.Arn
+    Export:
+      Name: !Sub wistia-${Env}-datalake-bucket-arn
+
+  ArtifactsBucketName:
+    Description: Name of the artifacts bucket. Holds Lambda zips and Glue scripts.
+    Value: !Ref ArtifactsBucket
+    Export:
+      Name: !Sub wistia-${Env}-artifacts-bucket
+
+  ArtifactsBucketArn:
+    Description: ARN of the artifacts bucket.
+    Value: !GetAtt ArtifactsBucket.Arn
+    Export:
+      Name: !Sub wistia-${Env}-artifacts-bucket-arn
