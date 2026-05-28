@@ -113,14 +113,14 @@ def to_fact_media_engagement(events: DataFrame, by_date: DataFrame) -> DataFrame
     )
 
 
-def read_silver(spark: SparkSession, endpoint: str, silver_root: Path) -> DataFrame:
-    """Read Silver Parquet for ``endpoint``."""
-    return spark.read.parquet(str(silver_root / endpoint))
+def read_silver(spark: SparkSession, endpoint: str, silver_root: str | Path) -> DataFrame:
+    """Read Silver Parquet for ``endpoint``. ``silver_root`` may be a local path or s3:// URI."""
+    return spark.read.parquet(config.join_layer_path(silver_root, endpoint))
 
 
-def write_gold(df: DataFrame, table: str, gold_root: Path) -> None:
+def write_gold(df: DataFrame, table: str, gold_root: str | Path) -> None:
     """Write a Gold DataFrame to ``gold_root/table`` as Parquet (overwrite)."""
-    path = str(gold_root / table)
+    path = config.join_layer_path(gold_root, table)
     df.write.mode("overwrite").parquet(path)
     logger.info("gold written table=%s path=%s", table, path)
 
@@ -128,8 +128,8 @@ def write_gold(df: DataFrame, table: str, gold_root: Path) -> None:
 def run_gold(
     spark: SparkSession,
     *,
-    silver_root: Path = config.SILVER_ROOT,
-    gold_root: Path = config.GOLD_ROOT,
+    silver_root: str | Path = config.SILVER_ROOT,
+    gold_root: str | Path = config.GOLD_ROOT,
 ) -> dict[str, int]:
     """Build the Gold star schema; return per-table row counts."""
     silver_events = read_silver(spark, config.EVENTS, silver_root).cache()

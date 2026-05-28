@@ -1,0 +1,361 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: |
+  Wistia Phase 3 — Transforms stack (PR 3).
+  Deploys the Bronze/Silver/Gold transforms as 3 Glue 5.0 ETL jobs, chained
+  by a Glue Workflow. The starting trigger is a daily cron (DEACTIVATED on
+  deploy; PR 5 activates it for the 7-day production run). The two
+  conditional triggers between jobs are ACTIVATED on creation so manual
+  workflow runs chain correctly.
+
+Parameters:
+
+  Env:
+    Type: String
+    Default: prod
+    AllowedValues:
+      - dev
+      - prod
+    Description: Deployment environment. Must match the foundation stack.
+
+  GlueVersion:
+    Type: String
+    Default: "5.0"
+    Description: Glue version. 5.0 = Spark 3.5.4 + Python 3.11 (matches local).
+
+  WorkerType:
+    Type: String
+    Default: G.1X
+    AllowedValues:
+      - G.1X
+      - G.2X
+      - G.4X
+    Description: |
+      Glue worker type. G.1X (1 DPU = 4 vCPU / 16 GB) is the minimum for
+      `glueetl` jobs and plenty for our small data. G.025X is streaming-only.
+
+  NumberOfWorkers:
+    Type: Number
+    Default: 2
+    MinValue: 2
+    Description: Number of workers per Glue job. Minimum 2 for G.1X.
+
+  ScheduleExpression:
+    Type: String
+    Default: cron(15 6 * * ? *)
+    Description: |
+      Cron schedule for the workflow's starting trigger. 06:15 UTC daily
+      gives the Lambda ingestion (06:00 UTC) ~15 minutes of headroom.
+      Deploys DEACTIVATED — PR 5 activates.
+
+Resources:
+
+  # =========================================================================
+  # IAM role assumed by every Glue job in the workflow.
+  #
+  # Trust policy: Glue service can call sts:AssumeRole.
+  # Permissions:
+  #   - AWSGlueServiceRole (managed)  → Glue logs, CloudWatch metrics, etc.
+  #   - Inline data-lake policy       → S3 R/W on the data lake bucket only.
+  #   - Inline artifacts-read policy  → S3 read on the artifacts bucket only
+  #     (so Glue can fetch the script + transforms.zip referenced by each job).
+  # =========================================================================
+  GlueServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub wistia-${Env}-glue-service-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: data-lake-rw
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub
+                    - arn:aws:s3:::${B}/*
+                    - B: !ImportValue
+                        Fn::Sub: wistia-${Env}-datalake-bucket
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub
+                    - arn:aws:s3:::${B}
+                    - B: !ImportValue
+                        Fn::Sub: wistia-${Env}-datalake-bucket
+        - PolicyName: artifacts-read
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub
+                    - arn:aws:s3:::${B}/glue/*
+                    - B: !ImportValue
+                        Fn::Sub: wistia-${Env}-artifacts-bucket
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub
+                    - arn:aws:s3:::${B}
+                    - B: !ImportValue
+                        Fn::Sub: wistia-${Env}-artifacts-bucket
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: transforms
+
+  # =========================================================================
+  # Glue Workflow — the DAG container. Manual "Run" from the console kicks it
+  # off; the conditional triggers below chain the jobs.
+  # =========================================================================
+  TransformsWorkflow:
+    Type: AWS::Glue::Workflow
+    Properties:
+      Name: !Sub wistia-${Env}-transforms
+      Description: Bronze -> Silver -> Gold medallion pipeline
+      MaxConcurrentRuns: 1
+      Tags:
+        project: wistia
+        env: !Ref Env
+        stack: transforms
+
+  # =========================================================================
+  # Three Glue jobs. Each is a thin entry-point script in S3
+  # (s3://artifacts/glue/<job>_job.py) plus the shared transforms.zip pulled
+  # via --extra-py-files. The pure transform functions in src/transforms/*
+  # run unchanged inside Glue 5.0.
+  # =========================================================================
+
+  BronzeJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub wistia-${Env}-bronze
+      Description: Landing JSON -> Bronze Parquet
+      Role: !GetAtt GlueServiceRole.Arn
+      GlueVersion: !Ref GlueVersion
+      WorkerType: !Ref WorkerType
+      NumberOfWorkers: !Ref NumberOfWorkers
+      Timeout: 30                   # minutes
+      MaxRetries: 1
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      Command:
+        Name: glueetl               # standard PySpark ETL (not pythonshell)
+        PythonVersion: "3"
+        ScriptLocation: !Sub
+          - s3://${B}/glue/bronze_job.py
+          - B: !ImportValue
+              Fn::Sub: wistia-${Env}-artifacts-bucket
+      DefaultArguments:
+        "--DATALAKE_BUCKET": !ImportValue
+          Fn::Sub: wistia-${Env}-datalake-bucket
+        # Job scripts call sc.addPyFile(args['TRANSFORMS_ZIP_S3']) to add the
+        # zip to sys.path explicitly — `--extra-py-files` alone doesn't make
+        # the modules importable at script-load time in Glue 5.0.
+        "--TRANSFORMS_ZIP_S3": !Sub
+          - s3://${B}/glue/transforms.zip
+          - B: !ImportValue
+              Fn::Sub: wistia-${Env}-artifacts-bucket
+        "--extra-py-files": !Sub
+          - s3://${B}/glue/transforms.zip
+          - B: !ImportValue
+              Fn::Sub: wistia-${Env}-artifacts-bucket
+        "--enable-continuous-cloudwatch-log": "true"
+        "--enable-metrics": "true"
+        "--job-language": "python"
+      Tags:
+        project: wistia
+        env: !Ref Env
+        stack: transforms
+        layer: bronze
+
+  SilverJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub wistia-${Env}-silver
+      Description: Bronze Parquet -> Silver Parquet (clean, type, dedupe)
+      Role: !GetAtt GlueServiceRole.Arn
+      GlueVersion: !Ref GlueVersion
+      WorkerType: !Ref WorkerType
+      NumberOfWorkers: !Ref NumberOfWorkers
+      Timeout: 30
+      MaxRetries: 1
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      Command:
+        Name: glueetl
+        PythonVersion: "3"
+        ScriptLocation: !Sub
+          - s3://${B}/glue/silver_job.py
+          - B: !ImportValue
+              Fn::Sub: wistia-${Env}-artifacts-bucket
+      DefaultArguments:
+        "--DATALAKE_BUCKET": !ImportValue
+          Fn::Sub: wistia-${Env}-datalake-bucket
+        # Job scripts call sc.addPyFile(args['TRANSFORMS_ZIP_S3']) to add the
+        # zip to sys.path explicitly — `--extra-py-files` alone doesn't make
+        # the modules importable at script-load time in Glue 5.0.
+        "--TRANSFORMS_ZIP_S3": !Sub
+          - s3://${B}/glue/transforms.zip
+          - B: !ImportValue
+              Fn::Sub: wistia-${Env}-artifacts-bucket
+        "--extra-py-files": !Sub
+          - s3://${B}/glue/transforms.zip
+          - B: !ImportValue
+              Fn::Sub: wistia-${Env}-artifacts-bucket
+        "--enable-continuous-cloudwatch-log": "true"
+        "--enable-metrics": "true"
+        "--job-language": "python"
+      Tags:
+        project: wistia
+        env: !Ref Env
+        stack: transforms
+        layer: silver
+
+  GoldJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub wistia-${Env}-gold
+      Description: Silver Parquet -> Gold star schema (dim/fact tables)
+      Role: !GetAtt GlueServiceRole.Arn
+      GlueVersion: !Ref GlueVersion
+      WorkerType: !Ref WorkerType
+      NumberOfWorkers: !Ref NumberOfWorkers
+      Timeout: 30
+      MaxRetries: 1
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      Command:
+        Name: glueetl
+        PythonVersion: "3"
+        ScriptLocation: !Sub
+          - s3://${B}/glue/gold_job.py
+          - B: !ImportValue
+              Fn::Sub: wistia-${Env}-artifacts-bucket
+      DefaultArguments:
+        "--DATALAKE_BUCKET": !ImportValue
+          Fn::Sub: wistia-${Env}-datalake-bucket
+        # Job scripts call sc.addPyFile(args['TRANSFORMS_ZIP_S3']) to add the
+        # zip to sys.path explicitly — `--extra-py-files` alone doesn't make
+        # the modules importable at script-load time in Glue 5.0.
+        "--TRANSFORMS_ZIP_S3": !Sub
+          - s3://${B}/glue/transforms.zip
+          - B: !ImportValue
+              Fn::Sub: wistia-${Env}-artifacts-bucket
+        "--extra-py-files": !Sub
+          - s3://${B}/glue/transforms.zip
+          - B: !ImportValue
+              Fn::Sub: wistia-${Env}-artifacts-bucket
+        "--enable-continuous-cloudwatch-log": "true"
+        "--enable-metrics": "true"
+        "--job-language": "python"
+      Tags:
+        project: wistia
+        env: !Ref Env
+        stack: transforms
+        layer: gold
+
+  # =========================================================================
+  # Triggers — the DAG edges.
+  #
+  # 1. StartTrigger    SCHEDULED, fires BronzeJob. Deploys DEACTIVATED (no
+  #                    StartOnCreation) so the workflow doesn't auto-run until
+  #                    PR 5 enables it. Manual workflow runs from the console
+  #                    work regardless of this trigger's state.
+  # 2. BronzeToSilver  CONDITIONAL, predicate = BronzeJob SUCCEEDED, fires
+  #                    SilverJob. StartOnCreation: true so it listens
+  #                    immediately.
+  # 3. SilverToGold    CONDITIONAL, predicate = SilverJob SUCCEEDED, fires
+  #                    GoldJob. StartOnCreation: true.
+  # =========================================================================
+
+  # ON_DEMAND entry trigger — fires Bronze when `aws glue start-workflow-run`
+  # is called. PR 5 replaces this with a SCHEDULED trigger (different name)
+  # for the 7-day production cron; a Glue workflow can only have ONE
+  # starting trigger, so this is either-or, not both. ``ScheduleExpression``
+  # parameter (declared above) is kept for PR 5's use.
+  StartTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: !Sub wistia-${Env}-on-demand-start
+      Type: ON_DEMAND
+      WorkflowName: !Ref TransformsWorkflow
+      Description: Manual entry point. PR 5 replaces with SCHEDULED for prod cron.
+      Actions:
+        - JobName: !Ref BronzeJob
+
+  BronzeToSilverTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: !Sub wistia-${Env}-bronze-to-silver
+      Type: CONDITIONAL
+      StartOnCreation: true
+      WorkflowName: !Ref TransformsWorkflow
+      Description: Fires SilverJob when BronzeJob succeeds.
+      Predicate:
+        Conditions:
+          - LogicalOperator: EQUALS
+            JobName: !Ref BronzeJob
+            State: SUCCEEDED
+      Actions:
+        - JobName: !Ref SilverJob
+
+  SilverToGoldTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: !Sub wistia-${Env}-silver-to-gold
+      Type: CONDITIONAL
+      StartOnCreation: true
+      WorkflowName: !Ref TransformsWorkflow
+      Description: Fires GoldJob when SilverJob succeeds.
+      Predicate:
+        Conditions:
+          - LogicalOperator: EQUALS
+            JobName: !Ref SilverJob
+            State: SUCCEEDED
+      Actions:
+        - JobName: !Ref GoldJob
+
+Outputs:
+
+  WorkflowName:
+    Description: Name of the Glue Workflow. Manual `aws glue start-workflow-run`.
+    Value: !Ref TransformsWorkflow
+    Export:
+      Name: !Sub wistia-${Env}-transforms-workflow
+
+  BronzeJobName:
+    Description: Name of the Bronze Glue job.
+    Value: !Ref BronzeJob
+
+  SilverJobName:
+    Description: Name of the Silver Glue job.
+    Value: !Ref SilverJob
+
+  GoldJobName:
+    Description: Name of the Gold Glue job.
+    Value: !Ref GoldJob
+
+  StartTriggerName:
+    Description: Name of the on-demand starting trigger. PR 5 replaces with SCHEDULED.
+    Value: !Ref StartTrigger

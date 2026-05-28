@@ -37,14 +37,16 @@ def to_bronze(envelopes: DataFrame) -> DataFrame:
     ).select("record.*", "ingest_timestamp", "ingest_date", "media_id")
 
 
-def read_landing(spark: SparkSession, endpoint: str, landing_root: Path) -> DataFrame:
+def read_landing(spark: SparkSession, endpoint: str, landing_root: str | Path) -> DataFrame:
     """Read every landing JSON file for ``endpoint`` into an envelope DataFrame.
 
-    ``recursiveFileLookup`` walks the ``media_id=`` / ``ingest_date=`` partition
-    directories without treating their names as Spark partition columns; the
-    explicit envelope schema keeps the read fast and stable across empty pulls.
+    ``landing_root`` accepts a local ``Path`` (Phase 2) or an ``s3://...`` URI
+    (Phase 3 Glue). ``recursiveFileLookup`` walks the ``media_id=`` /
+    ``ingest_date=`` partition directories without treating their names as
+    Spark partition columns; the explicit envelope schema keeps the read fast
+    and stable across empty pulls.
     """
-    path = str(landing_root / endpoint)
+    path = config.join_layer_path(landing_root, endpoint)
     return (
         spark.read.schema(ENVELOPE_SCHEMAS[endpoint])
         .option("multiLine", "true")
@@ -53,9 +55,9 @@ def read_landing(spark: SparkSession, endpoint: str, landing_root: Path) -> Data
     )
 
 
-def write_bronze(df: DataFrame, endpoint: str, bronze_root: Path) -> None:
+def write_bronze(df: DataFrame, endpoint: str, bronze_root: str | Path) -> None:
     """Write a Bronze DataFrame to ``bronze_root/endpoint`` as Parquet (overwrite)."""
-    path = str(bronze_root / endpoint)
+    path = config.join_layer_path(bronze_root, endpoint)
     df.write.mode("overwrite").parquet(path)
     logger.info("bronze written endpoint=%s path=%s", endpoint, path)
 
@@ -63,8 +65,8 @@ def write_bronze(df: DataFrame, endpoint: str, bronze_root: Path) -> None:
 def run_bronze(
     spark: SparkSession,
     *,
-    landing_root: Path = config.LANDING_ROOT,
-    bronze_root: Path = config.BRONZE_ROOT,
+    landing_root: str | Path = config.LANDING_ROOT,
+    bronze_root: str | Path = config.BRONZE_ROOT,
 ) -> dict[str, int]:
     """Build the Bronze layer for every endpoint; return per-endpoint row counts."""
     counts: dict[str, int] = {}

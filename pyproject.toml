@@ -7,7 +7,13 @@ addopts = "--cov=src --cov-report=term-missing --cov-fail-under=100"
 source = ["src"]
 # app.py is pure Streamlit UI wiring — impractical to unit-test meaningfully;
 # all real logic lives in src/dashboard/data.py (fully covered).
-omit = ["src/dashboard/app.py"]
+# src/transforms/glue/*_job.py are Glue 5.0 entry-point scripts that import
+# awsglue.* (only available in the Glue runtime) and call already-tested
+# transforms unchanged — not runnable in CI.
+omit = [
+    "src/dashboard/app.py",
+    "src/transforms/glue/*",
+]
 
 [tool.ruff]
 line-length = 100

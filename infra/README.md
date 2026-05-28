@@ -13,12 +13,13 @@ infra/
   cloudformation/
     foundation.yaml      # PR 1 — S3 data lake + artifacts buckets
     ingest.yaml          # PR 2 — Lambda ingestion + EventBridge schedule (DISABLED)
-    transforms.yaml      # PR 3 — Glue jobs + Workflow (TBD)
+    transforms.yaml      # PR 3 — Glue jobs + Workflow (scheduled trigger DEACTIVATED)
     dashboard.yaml       # PR 4 — ECR + ECS + ALB (TBD)
     monitoring.yaml      # PR 5 — Alarms + SNS (TBD)
   scripts/
     deploy.ps1           # Wrapper: validate + deploy + print outputs
     package-lambda.ps1   # Builds the Lambda zip (and optionally uploads to S3)
+    package-transforms.ps1  # Builds the transforms zip + uploads the 3 Glue job scripts
 ```
 
 Each PR in Phase 3 adds one template and extends the deploy script's
@@ -110,6 +111,71 @@ Get-Content build/lambda-invoke-response.json
 
 The EventBridge schedule deploys `DISABLED` — manual invokes are how PR 2
 gets verified. PR 5 flips the schedule to `ENABLED` to start the 7-day run.
+
+### Deploying the transforms stack (PR 3)
+
+Like the ingest stack, the transforms stack needs artifacts uploaded before
+the deploy:
+
+1. **Build + upload the transforms zip and 3 Glue job scripts**:
+
+   ```powershell
+   ./infra/scripts/package-transforms.ps1 -Upload
+   ```
+
+   This produces `build/transforms.zip` (~11 KB, pure-Python source only —
+   Glue 5.0 provides Spark + Python 3.11 at runtime) and uploads it to
+   `s3://wistia-artifacts-.../glue/transforms.zip`. It also uploads the
+   three entry-point scripts to `s3://wistia-artifacts-.../glue/{bronze,silver,gold}_job.py`.
+
+2. **Deploy the stack**:
+
+   ```powershell
+   ./infra/scripts/deploy.ps1 -Stack transforms
+   ```
+
+### Running the transforms workflow manually
+
+The starting trigger in PR 3 is an **ON_DEMAND** trigger
+(`wistia-prod-on-demand-start`) — a Glue workflow can only have one
+starting trigger, and ON_DEMAND is the type that responds to
+`start-workflow-run`. PR 5 replaces this with a SCHEDULED trigger of a
+different name for the 7-day production cron.
+
+To kick off a workflow run for verification:
+
+```powershell
+aws glue start-workflow-run --name wistia-prod-transforms
+```
+
+This returns a `RunId`. The workflow run fires Bronze, then the conditional
+triggers chain Silver and Gold. Poll status with:
+
+```powershell
+aws glue get-workflow-run `
+    --name wistia-prod-transforms `
+    --run-id <RunId> `
+    --query 'Run.[Status,Statistics]'
+```
+
+Total runtime is ~5-10 minutes for our small data (3 jobs × ~1-3 min each;
+Glue cold-start adds ~30s per job).
+
+### Updating the transforms code
+
+When you change `src/transforms/*.py` (the pure transforms):
+
+1. Re-run `./infra/scripts/package-transforms.ps1 -Upload` — rebuilds and
+   re-uploads the zip.
+2. Glue jobs reference the zip by S3 path; each new job run picks up the
+   latest zip automatically (unlike Lambda, no `update-function-code`
+   needed). The Spark workers fetch `transforms.zip` at job start.
+
+When you change a Glue entry-point script (`src/transforms/glue/*_job.py`):
+
+1. Same `./infra/scripts/package-transforms.ps1 -Upload` — it also re-uploads
+   the 3 scripts.
+2. Glue picks up the new script on the next job run.
 
 ## Verify
 
