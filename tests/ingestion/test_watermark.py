@@ -1,10 +1,12 @@
-"""Tests for the incremental watermark store."""
+"""Tests for the incremental watermark store — local + S3 backends."""
 
 from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Any
 
+import boto3
 import pytest
+from moto import mock_aws
 
 from src.ingestion import config
 from src.ingestion.watermark import WatermarkStore, newest_received_at
@@ -73,3 +75,59 @@ def test_newest_received_at_returns_latest() -> None:
 
 def test_newest_received_at_empty_returns_none() -> None:
     assert newest_received_at([]) is None
+
+
+# --- S3 backend ----------------------------------------------------------------
+
+
+@pytest.fixture
+def s3_bucket() -> Any:
+    """A moto-backed S3 bucket fixture; yields its name."""
+    with mock_aws():
+        bucket = "test-state-bucket"
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket)
+        yield bucket
+
+
+def test_load_missing_s3_object_returns_floor_defaults(s3_bucket: str) -> None:
+    """Loading from an S3 key that doesn't exist yet starts from the floor."""
+    uri = f"s3://{s3_bucket}/state/watermark.json"
+    store = WatermarkStore.load(uri)
+    assert store.events_since("abc") == datetime.combine(
+        config.BACKFILL_FLOOR_DATE, time.min, tzinfo=timezone.utc
+    )
+    assert store.by_date_start("abc") == config.BACKFILL_FLOOR_DATE
+
+
+def test_watermark_round_trips_through_s3(s3_bucket: str) -> None:
+    """Save → re-load preserves both watermark kinds via S3."""
+    uri = f"s3://{s3_bucket}/state/watermark.json"
+    store = WatermarkStore.load(uri)
+    events_wm = datetime(2026, 5, 20, 14, 47, 14, tzinfo=timezone.utc)
+    by_date_wm = date(2026, 5, 20)
+    store.set_events_watermark("abc", events_wm)
+    store.set_by_date_watermark("abc", by_date_wm)
+    store.save()
+
+    # Confirm the object exists in S3
+    head = boto3.client("s3", region_name="us-east-1").head_object(
+        Bucket=s3_bucket, Key="state/watermark.json"
+    )
+    assert head["ContentType"] == "application/json"
+
+    # Round-trip through a fresh load
+    reloaded = WatermarkStore.load(uri)
+    assert reloaded.events_since("abc") == events_wm
+    assert reloaded.by_date_start("abc") == by_date_wm
+
+
+def test_load_s3_propagates_unexpected_client_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-NoSuchKey ClientError is re-raised (not silently treated as absent)."""
+    from botocore.exceptions import ClientError
+
+    def _raise(*_args: object, **_kwargs: object) -> None:
+        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "GetObject")
+
+    monkeypatch.setattr("botocore.client.BaseClient._make_api_call", _raise)
+    with pytest.raises(ClientError, match="AccessDenied"):
+        WatermarkStore.load("s3://any-bucket/any-key")

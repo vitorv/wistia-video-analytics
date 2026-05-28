@@ -3,12 +3,13 @@
 ``run()`` wires the client, extractors, landing writer, and watermark store into
 one pass over the configured media. Two entry points share it:
   - ``python -m src.ingestion`` (see ``__main__.py``) — local runs
-  - ``handler()`` — AWS Lambda (Phase 2)
+  - ``handler()`` — AWS Lambda (Phase 3)
 
-Deployment (Phase 2): the Lambda package bundles ``src/ingestion/`` plus the
+Phase 3 deployment: the Lambda package bundles ``src/ingestion/`` plus the
 ``requirements.txt`` dependencies; the handler is ``src.ingestion.pipeline.handler``.
-The landing zone and watermark store currently use local paths (``config``) —
-Phase 2 repoints both at S3 before this runs in Lambda for real.
+The landing zone and watermark store dispatch on whether
+``WISTIA_LANDING_BUCKET`` is set in the environment — set in Lambda (S3 mode),
+unset in local development (writes to ``./landing/``).
 """
 
 import logging
@@ -16,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.common.logging import configure_logging
 from src.ingestion import config
 from src.ingestion.client import WistiaClient
 from src.ingestion.errors import WistiaAuthError, WistiaError
@@ -29,8 +31,8 @@ logger = logging.getLogger(__name__)
 def run(
     media_ids: list[str] | None = None,
     *,
-    landing_root: Path | None = None,
-    watermark_path: Path | None = None,
+    landing_root: str | Path | None = None,
+    watermark_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Ingest every endpoint for each media into the landing zone.
 
@@ -39,13 +41,23 @@ def run(
     ``WistiaAuthError`` aborts the whole run (a bad token affects every media);
     any other per-media failure is logged and skipped so the rest still ingest.
 
+    ``landing_root`` and ``watermark_path`` accept a local path or an
+    ``s3://...`` URI. When unset, ``config.get_landing_root()`` /
+    ``get_watermark_path()`` decide based on the ``WISTIA_LANDING_BUCKET``
+    environment variable.
+
     Returns a summary dict: ``{"media": {id: {...}}, "had_errors": bool}``.
     """
     media_ids = media_ids if media_ids is not None else config.MEDIA_IDS
-    landing_root = landing_root if landing_root is not None else config.LANDING_ROOT
-    watermark_path = watermark_path if watermark_path is not None else config.WATERMARK_PATH
+    landing_root = landing_root if landing_root is not None else config.get_landing_root()
+    watermark_path = watermark_path if watermark_path is not None else config.get_watermark_path()
 
-    logger.info("ingestion run starting media_ids=%s", media_ids)
+    logger.info(
+        "ingestion run starting media_ids=%s landing_root=%s watermark=%s",
+        media_ids,
+        landing_root,
+        watermark_path,
+    )
     store = WatermarkStore.load(watermark_path)
     summary: dict[str, Any] = {"media": {}, "had_errors": False}
 
@@ -67,13 +79,14 @@ def run(
 
 
 def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
-    """AWS Lambda entry point — Phase 2 bridge. Delegates to ``run()``.
+    """AWS Lambda entry point. Configures structured logging and delegates to ``run()``.
 
-    AWS Lambda's runtime already routes the root logger to CloudWatch, so this
-    only raises the level. The landing zone and watermark store still use the
-    local ``config`` paths; Phase 2 repoints them at S3.
+    The Lambda runtime sets ``WISTIA_LANDING_BUCKET`` (and optionally
+    ``WISTIA_STATE_KEY``) via the function's environment variables, which
+    flips both the landing zone and watermark to S3. Stdout is captured by
+    the Lambda runtime and routed to CloudWatch Logs.
     """
-    logging.getLogger("src.ingestion").setLevel(logging.INFO)
+    configure_logging()
     return run()
 
 
@@ -81,7 +94,7 @@ def _ingest_media(
     client: WistiaClient,
     store: WatermarkStore,
     media_id: str,
-    landing_root: Path,
+    landing_root: str | Path,
 ) -> dict[str, int]:
     """Pull every endpoint for one media, write landing files, advance watermarks."""
     logger.info("ingesting media_id=%s", media_id)

@@ -2,8 +2,10 @@
 
 from pathlib import Path
 
+import boto3
 import pytest
 import responses
+from moto import mock_aws
 
 from src.ingestion import config
 from src.ingestion.errors import WistiaAuthError
@@ -78,8 +80,10 @@ def test_run_skips_failed_media_and_continues(
 
 
 @responses.activate
-def test_handler_delegates_to_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_handler_delegates_to_run_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without ``WISTIA_LANDING_BUCKET``, the handler routes to local paths."""
     monkeypatch.setenv("WISTIA_API_TOKEN", "test-token")
+    monkeypatch.delenv("WISTIA_LANDING_BUCKET", raising=False)
     monkeypatch.setattr(config, "MEDIA_IDS", ["abc"])
     monkeypatch.setattr(config, "LANDING_ROOT", tmp_path / "landing")
     monkeypatch.setattr(config, "WATERMARK_PATH", tmp_path / "_watermark.json")
@@ -91,3 +95,34 @@ def test_handler_delegates_to_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     assert result["had_errors"] is False
     assert result["media"]["abc"]["events"] == 0
+    # Local landing files exist
+    assert (tmp_path / "landing" / "events" / "media_id=abc").exists()
+
+
+@responses.activate
+def test_handler_writes_to_s3_when_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setting ``WISTIA_LANDING_BUCKET`` flips landing + watermark to S3."""
+    monkeypatch.setenv("WISTIA_API_TOKEN", "test-token")
+    monkeypatch.setattr(config, "MEDIA_IDS", ["abc"])
+    responses.get(EVENTS_URL, json=[])
+    responses.get(f"{config.BASE_URL}/stats/medias/abc/by_date", json=[])
+    responses.get(f"{config.BASE_URL}/medias/abc", json={"hashed_id": "abc"})
+
+    with mock_aws():
+        bucket = "test-handler-bucket"
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket=bucket)
+        monkeypatch.setenv("WISTIA_LANDING_BUCKET", bucket)
+
+        result = handler({}, None)
+
+        assert result["had_errors"] is False
+
+        # Each endpoint wrote at least one landing object under landing/<endpoint>/
+        for endpoint in ("events", "by_date", "media_metadata"):
+            listing = s3.list_objects_v2(Bucket=bucket, Prefix=f"landing/{endpoint}/")
+            assert listing.get("KeyCount", 0) >= 1, f"no objects under landing/{endpoint}/"
+
+        # Watermark JSON exists at the default state key
+        head = s3.head_object(Bucket=bucket, Key="state/watermark.json")
+        assert head["ContentType"] == "application/json"

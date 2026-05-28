@@ -1,0 +1,173 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: |
+  Wistia Phase 3 — Ingest stack (PR 2).
+  Deploys the Wistia API ingestion as a scheduled AWS Lambda function.
+  Reads from the Wistia Stats API and writes raw JSON to the data lake
+  bucket under landing/, with watermarks at state/watermark.json. The
+  EventBridge schedule is created DISABLED — PR 5 flips it on for the
+  7-day production run.
+
+Parameters:
+
+  Env:
+    Type: String
+    Default: prod
+    AllowedValues:
+      - dev
+      - prod
+    Description: Deployment environment. Must match the foundation stack's Env.
+
+  WistiaApiToken:
+    Type: String
+    NoEcho: true
+    Description: |
+      Wistia Stats API bearer token. NoEcho hides the value in describe-stack
+      output and the console. Pass at deploy time via --parameter-overrides.
+
+  ScheduleExpression:
+    Type: String
+    Default: cron(0 6 * * ? *)
+    Description: |
+      EventBridge schedule for the daily ingestion run. Defaults to 06:00 UTC
+      daily. The schedule deploys DISABLED — flip to ENABLED in PR 5.
+
+Resources:
+
+  # =========================================================================
+  # IAM role assumed by the Lambda function.
+  #
+  # Trust policy: Lambda service can call sts:AssumeRole.
+  # Permissions:
+  #   - AWSLambdaBasicExecutionRole (managed)  → CloudWatch Logs writes
+  #   - Inline data-lake policy                → S3 GetObject/PutObject/ListBucket
+  #     on the data lake bucket only (no access to other buckets in the account).
+  # =========================================================================
+  LambdaExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub wistia-${Env}-lambda-ingest-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: data-lake-rw
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub
+                    - arn:aws:s3:::${B}/*
+                    - B: !ImportValue
+                        Fn::Sub: wistia-${Env}-datalake-bucket
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub
+                    - arn:aws:s3:::${B}
+                    - B: !ImportValue
+                        Fn::Sub: wistia-${Env}-datalake-bucket
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: ingest
+
+  # =========================================================================
+  # The Lambda function. Code lives in the artifacts bucket — the
+  # package-lambda.ps1 script builds + uploads the zip before deploy.
+  # =========================================================================
+  IngestFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub wistia-${Env}-ingest
+      Description: Pulls the Wistia Stats API and writes raw JSON to the data lake.
+      Runtime: python3.11
+      Handler: src.ingestion.pipeline.handler
+      Role: !GetAtt LambdaExecRole.Arn
+      MemorySize: 512
+      Timeout: 300        # seconds — Wistia API + boto3 PutObjects for two media
+      Code:
+        S3Bucket: !ImportValue
+          Fn::Sub: wistia-${Env}-artifacts-bucket
+        S3Key: lambda/ingest.zip
+      Environment:
+        Variables:
+          WISTIA_API_TOKEN: !Ref WistiaApiToken
+          WISTIA_LANDING_BUCKET: !ImportValue
+            Fn::Sub: wistia-${Env}-datalake-bucket
+          # WISTIA_STATE_KEY defaults to state/watermark.json inside the bucket
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: ingest
+
+  # =========================================================================
+  # Explicit log group — without this, Lambda creates one with infinite retention
+  # on first invocation. Setting it explicitly lets us pin a retention policy
+  # and keeps the log group as a managed CFN resource (deleted on stack delete).
+  # =========================================================================
+  IngestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${IngestFunction}
+      RetentionInDays: 14
+
+  # =========================================================================
+  # EventBridge schedule. Deploys DISABLED — flip to ENABLED in PR 5 to start
+  # the 7-day production run.
+  # =========================================================================
+  IngestSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub wistia-${Env}-ingest-daily
+      Description: Daily trigger for the Wistia ingest Lambda. DISABLED until PR 5.
+      ScheduleExpression: !Ref ScheduleExpression
+      State: DISABLED
+      Targets:
+        - Arn: !GetAtt IngestFunction.Arn
+          Id: ingest-target
+
+  # Permission grant — without this, EventBridge can't invoke the Lambda
+  # (the function-level resource policy must allow events.amazonaws.com).
+  IngestSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref IngestFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt IngestSchedule.Arn
+
+Outputs:
+
+  IngestFunctionName:
+    Description: Name of the ingest Lambda function. Useful for `aws lambda invoke`.
+    Value: !Ref IngestFunction
+    Export:
+      Name: !Sub wistia-${Env}-ingest-function
+
+  IngestFunctionArn:
+    Description: ARN of the ingest Lambda function.
+    Value: !GetAtt IngestFunction.Arn
+    Export:
+      Name: !Sub wistia-${Env}-ingest-function-arn
+
+  IngestScheduleName:
+    Description: Name of the EventBridge schedule rule. PR 5 enables it.
+    Value: !Ref IngestSchedule
