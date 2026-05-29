@@ -90,14 +90,14 @@ def to_silver_media_metadata(bronze: DataFrame) -> DataFrame:
     )
 
 
-def read_bronze(spark: SparkSession, endpoint: str, bronze_root: Path) -> DataFrame:
-    """Read Bronze Parquet for ``endpoint``."""
-    return spark.read.parquet(str(bronze_root / endpoint))
+def read_bronze(spark: SparkSession, endpoint: str, bronze_root: str | Path) -> DataFrame:
+    """Read Bronze Parquet for ``endpoint``. ``bronze_root`` may be a local path or s3:// URI."""
+    return spark.read.parquet(config.join_layer_path(bronze_root, endpoint))
 
 
-def write_silver(df: DataFrame, endpoint: str, silver_root: Path) -> None:
+def write_silver(df: DataFrame, endpoint: str, silver_root: str | Path) -> None:
     """Write a Silver DataFrame to ``silver_root/endpoint`` as Parquet (overwrite)."""
-    path = str(silver_root / endpoint)
+    path = config.join_layer_path(silver_root, endpoint)
     df.write.mode("overwrite").parquet(path)
     logger.info("silver written endpoint=%s path=%s", endpoint, path)
 
@@ -112,8 +112,8 @@ _TRANSFORMS = {
 def run_silver(
     spark: SparkSession,
     *,
-    bronze_root: Path = config.BRONZE_ROOT,
-    silver_root: Path = config.SILVER_ROOT,
+    bronze_root: str | Path = config.BRONZE_ROOT,
+    silver_root: str | Path = config.SILVER_ROOT,
 ) -> dict[str, int]:
     """Build the Silver layer for every endpoint; return per-endpoint row counts."""
     counts: dict[str, int] = {}

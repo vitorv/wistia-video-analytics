@@ -21,3 +21,21 @@ def test_gold_table_names() -> None:
     assert config.DIM_MEDIA == "dim_media"
     assert config.DIM_VISITOR == "dim_visitor"
     assert config.FACT_MEDIA_ENGAGEMENT == "fact_media_engagement"
+
+
+def test_join_layer_path_with_local_path() -> None:
+    assert config.join_layer_path(Path("bronze"), "events") == "bronze/events"
+
+
+def test_join_layer_path_with_s3_uri() -> None:
+    assert (
+        config.join_layer_path("s3://my-bucket/bronze", "events") == "s3://my-bucket/bronze/events"
+    )
+
+
+def test_join_layer_path_strips_extra_slashes() -> None:
+    # Trailing slash on root + leading slash on leaf → still single-slashed.
+    assert (
+        config.join_layer_path("s3://my-bucket/bronze/", "/events")
+        == "s3://my-bucket/bronze/events"
+    )
