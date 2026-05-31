@@ -15,12 +15,19 @@ import pandas as pd
 from src.transforms import config
 
 
-def load_gold(gold_root: Path) -> dict[str, pd.DataFrame]:
-    """Load the three Gold tables from ``gold_root`` as a dict keyed by table."""
+def load_gold(gold_root: str | Path) -> dict[str, pd.DataFrame]:
+    """Load the three Gold tables from ``gold_root`` as a dict keyed by table.
+
+    ``gold_root`` can be a local ``Path`` (Phase 2 dev) or an ``s3://`` URI
+    (Phase 3 prod). ``pandas.read_parquet`` reads both transparently when
+    ``s3fs`` is installed (pulled in via ``requirements-dashboard.txt``).
+    """
     return {
-        config.DIM_MEDIA: pd.read_parquet(gold_root / config.DIM_MEDIA),
-        config.DIM_VISITOR: pd.read_parquet(gold_root / config.DIM_VISITOR),
-        config.FACT_MEDIA_ENGAGEMENT: pd.read_parquet(gold_root / config.FACT_MEDIA_ENGAGEMENT),
+        config.DIM_MEDIA: pd.read_parquet(config.join_layer_path(gold_root, config.DIM_MEDIA)),
+        config.DIM_VISITOR: pd.read_parquet(config.join_layer_path(gold_root, config.DIM_VISITOR)),
+        config.FACT_MEDIA_ENGAGEMENT: pd.read_parquet(
+            config.join_layer_path(gold_root, config.FACT_MEDIA_ENGAGEMENT)
+        ),
     }
 
 

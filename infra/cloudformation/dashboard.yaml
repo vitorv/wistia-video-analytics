@@ -1,0 +1,442 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: |
+  Wistia Phase 3 — Dashboard stack (PR 4).
+  Deploys the Streamlit dashboard as an ECS Fargate task behind a public
+  Application Load Balancer. The container reads Gold Parquet straight
+  from S3 (s3://datalake/gold) via pandas + s3fs — no Spark.
+
+  Two-phase deploy (chicken-and-egg with ECR):
+    1. Deploy with DeployService=false → creates ECR + cluster + ALB +
+       task def + log group + IAM, but no Service. The image doesn't exist
+       in ECR yet, so a Service would fail to pull.
+    2. Build + push the dashboard image to the ECR repo created in step 1
+       (see infra/scripts/build-dashboard-image.ps1).
+    3. Re-deploy with DeployService=true → adds the ECS Service which
+       launches the task, registers with the ALB target group, and
+       exposes the dashboard on the ALB DNS name.
+
+  After step 3, the DashboardUrl output is the public HTTP URL.
+
+Parameters:
+
+  Env:
+    Type: String
+    Default: prod
+    AllowedValues:
+      - dev
+      - prod
+    Description: Deployment environment. Must match the foundation stack's Env.
+
+  DeployService:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: |
+      Whether to deploy the ECS Service resource. Set to "false" for the
+      initial deploy (before any image exists in ECR); set to "true" after
+      building + pushing the image so the Service can pull and run it.
+
+  DefaultVpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: |
+      Default VPC ID. Discover via:
+        aws ec2 describe-vpcs --filters Name=is-default,Values=true \
+          --query 'Vpcs[0].VpcId' --output text
+
+  DefaultPublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: |
+      Comma-separated list of public subnet IDs in the default VPC. The ALB
+      needs at least two AZs; ECS tasks share the same subnets (with public
+      IPs assigned, so they can pull from ECR without a NAT gateway).
+      Discover via:
+        aws ec2 describe-subnets --filters Name=vpc-id,Values=<vpc-id> \
+          --query 'Subnets[].SubnetId' --output text
+
+  ContainerCpu:
+    Type: String
+    Default: "512"
+    AllowedValues: ["256", "512", "1024", "2048"]
+    Description: Fargate task CPU units (1024 = 1 vCPU). 512 = 0.5 vCPU.
+
+  ContainerMemory:
+    Type: String
+    Default: "1024"
+    Description: |
+      Fargate task memory in MiB. Must be a valid pair with ContainerCpu —
+      e.g., 512 CPU pairs with 1024-4096 MiB. See ECS docs for the full
+      matrix.
+
+  ImageTag:
+    Type: String
+    Default: latest
+    Description: |
+      ECR image tag the task definition pulls. Defaults to "latest" — the
+      build script also pushes a :<git-sha> tag for rollback; override here
+      to pin to a specific revision.
+
+Conditions:
+
+  ServiceEnabled: !Equals [!Ref DeployService, "true"]
+
+Resources:
+
+  # =========================================================================
+  # ECR repository — Docker images for the dashboard live here.
+  # ImageScanningConfiguration scans on push for known CVEs (free).
+  # =========================================================================
+  EcrRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub wistia-${Env}-dashboard
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: MUTABLE        # :latest needs to move between pushes
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: dashboard
+
+  # =========================================================================
+  # CloudWatch Log Group — ECS streams container stdout/stderr here via
+  # the awslogs driver. 14-day retention keeps costs trivial.
+  # =========================================================================
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/wistia-${Env}-dashboard
+      RetentionInDays: 14
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: dashboard
+
+  # =========================================================================
+  # ECS Cluster — a logical grouping. For Fargate there are no underlying
+  # EC2 instances; the cluster is just a name + namespace for tasks/services.
+  # =========================================================================
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub wistia-${Env}-dashboard
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled                 # extra cost; not needed for a school project
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: dashboard
+
+  # =========================================================================
+  # Security groups — standard public-LB-to-private-container pattern.
+  #   ALB SG  : inbound TCP/80 from anywhere (the internet)
+  #   ECS SG  : inbound TCP/8501 from the ALB SG only (not from the internet)
+  # SGs are unnamed so future ingress-rule changes don't trip lesson #12
+  # (custom-named-resource replacement).
+  # =========================================================================
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Wistia dashboard ALB - public HTTP ingress
+      VpcId: !Ref DefaultVpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Public HTTP
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: dashboard
+
+  EcsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Wistia dashboard ECS task - ALB-only ingress on 8501
+      VpcId: !Ref DefaultVpcId
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: dashboard
+
+  # SG-to-SG ingress as a separate resource so changes to either side don't
+  # require replacing both SGs.
+  EcsIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EcsSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8501
+      ToPort: 8501
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+      Description: Streamlit port - reachable only from the ALB
+
+  # =========================================================================
+  # Application Load Balancer — public-facing layer-7 LB. WebSocket-capable
+  # (Streamlit's reactive UI uses WebSockets).
+  # =========================================================================
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub wistia-${Env}-dashboard
+      Scheme: internet-facing
+      Type: application
+      Subnets: !Ref DefaultPublicSubnetIds
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: dashboard
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub wistia-${Env}-dashboard
+      Port: 8501
+      Protocol: HTTP
+      TargetType: ip                       # Fargate awsvpc networking uses IP targets
+      VpcId: !Ref DefaultVpcId
+      HealthCheckPath: /_stcore/health    # Streamlit's built-in health endpoint
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: "200"
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"                      # faster rolling updates than 300 default
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: dashboard
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # =========================================================================
+  # IAM roles — two distinct roles per ECS best practice:
+  #   - Task execution role: used by the ECS agent to pull from ECR + write
+  #     logs to CloudWatch. AWS-managed policy.
+  #   - Task role: used by the container itself. Scoped to S3 read on the
+  #     data lake bucket's gold/ prefix.
+  # =========================================================================
+  TaskExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub wistia-${Env}-dashboard-exec-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: dashboard
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub wistia-${Env}-dashboard-task-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: gold-read
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub
+                    - arn:aws:s3:::${B}/gold/*
+                    - B: !ImportValue
+                        Fn::Sub: wistia-${Env}-datalake-bucket
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub
+                    - arn:aws:s3:::${B}
+                    - B: !ImportValue
+                        Fn::Sub: wistia-${Env}-datalake-bucket
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - "gold/*"
+                      - "gold"
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: dashboard
+
+  # =========================================================================
+  # Task definition — immutable spec for the container. Each CFN update that
+  # changes any container field creates a new revision; the Service picks up
+  # the new revision and rolls.
+  # =========================================================================
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub wistia-${Env}-dashboard
+      Cpu: !Ref ContainerCpu
+      Memory: !Ref ContainerMemory
+      NetworkMode: awsvpc                  # required for Fargate
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt TaskExecRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: dashboard
+          Image: !Sub
+            - ${RepoUri}:${ImageTag}
+            - RepoUri: !GetAtt EcrRepository.RepositoryUri
+              ImageTag: !Ref ImageTag
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8501
+              Protocol: tcp
+          Environment:
+            - Name: WISTIA_GOLD_URI
+              Value: !Sub
+                - s3://${B}/gold
+                - B: !ImportValue
+                    Fn::Sub: wistia-${Env}-datalake-bucket
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: dashboard
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: dashboard
+
+  # =========================================================================
+  # ECS Service — keeps DesiredCount copies of the task running, wires them
+  # into the ALB target group. Gated by ServiceEnabled so the initial deploy
+  # (no image in ECR) can succeed.
+  # =========================================================================
+  Service:
+    Type: AWS::ECS::Service
+    Condition: ServiceEnabled
+    DependsOn:
+      - Listener
+      - EcsIngressFromAlb
+    Properties:
+      ServiceName: !Sub wistia-${Env}-dashboard
+      Cluster: !Ref EcsCluster
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      DesiredCount: 1
+      TaskDefinition: !Ref TaskDefinition
+      HealthCheckGracePeriodSeconds: 60    # let Streamlit warm up before health checks
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED          # required so the task can pull from ECR (no NAT)
+          Subnets: !Ref DefaultPublicSubnetIds
+          SecurityGroups:
+            - !Ref EcsSecurityGroup
+      LoadBalancers:
+        - ContainerName: dashboard
+          ContainerPort: 8501
+          TargetGroupArn: !Ref TargetGroup
+      PropagateTags: SERVICE
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: dashboard
+
+Outputs:
+
+  EcrRepositoryUri:
+    Description: ECR repository URI. Used by build-dashboard-image.ps1.
+    Value: !GetAtt EcrRepository.RepositoryUri
+    Export:
+      Name: !Sub wistia-${Env}-dashboard-ecr-uri
+
+  EcrRepositoryName:
+    Description: ECR repository name.
+    Value: !Ref EcrRepository
+
+  ClusterName:
+    Description: ECS cluster name.
+    Value: !Ref EcsCluster
+
+  ServiceName:
+    Condition: ServiceEnabled
+    Description: ECS service name (only set when DeployService=true).
+    Value: !Ref Service
+
+  LoadBalancerDnsName:
+    Description: ALB DNS name. Hit this to load the dashboard.
+    Value: !GetAtt LoadBalancer.DNSName
+
+  DashboardUrl:
+    Description: Public HTTP URL of the dashboard.
+    Value: !Sub http://${LoadBalancer.DNSName}
+    Export:
+      Name: !Sub wistia-${Env}-dashboard-url

@@ -1,0 +1,57 @@
+# Phase 2 local data dirs — never ship these
+landing/
+bronze/
+silver/
+gold/
+
+# Dev / tooling
+.venv/
+venv/
+.git/
+.github/
+.vscode/
+.idea/
+.claude/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Tests + dev requirements (image installs requirements-dashboard.txt only)
+tests/
+requirements.txt
+requirements-dev.txt
+
+# Code not used by the dashboard
+src/ingestion/
+src/transforms/bronze.py
+src/transforms/silver.py
+src/transforms/gold.py
+src/transforms/schemas.py
+src/transforms/spark.py
+src/transforms/__main__.py
+src/transforms/glue/
+
+# Vendored Windows Spark binaries
+vendor/
+
+# Build / packaging
+build/
+dist/
+*.zip
+*.egg-info/
+
+# Local env + secrets
+.env
+.env.*
+
+# Docs / vault / OS junk
+docs/
+context_vault/
+README.md
+*.md
+.DS_Store
+Thumbs.db

@@ -140,6 +140,27 @@ def test_load_gold_reads_all_three_tables(
     assert len(loaded["fact_media_engagement"]) == 3
 
 
+def test_load_gold_dispatches_s3_uri_to_read_parquet(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The Phase 3 ECS task passes ``s3://<bucket>/gold`` via the
+    # ``WISTIA_GOLD_URI`` env var. Verify ``load_gold`` joins it correctly
+    # for each of the three tables and hands the URIs unchanged to
+    # ``pandas.read_parquet`` (which delegates to ``s3fs`` at runtime).
+    seen: list[str] = []
+
+    def fake_read_parquet(path: str) -> pd.DataFrame:
+        seen.append(path)
+        return pd.DataFrame()
+
+    monkeypatch.setattr("src.dashboard.data.pd.read_parquet", fake_read_parquet)
+    load_gold("s3://my-bucket/gold")
+
+    assert seen == [
+        "s3://my-bucket/gold/dim_media",
+        "s3://my-bucket/gold/dim_visitor",
+        "s3://my-bucket/gold/fact_media_engagement",
+    ]
+
+
 def test_monthly_engagement_aggregates_per_month(
     fact: pd.DataFrame, dim_media: pd.DataFrame
 ) -> None:
