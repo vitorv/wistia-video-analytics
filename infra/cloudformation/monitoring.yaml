@@ -1,0 +1,182 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: |
+  Wistia Phase 3 — Monitoring stack (PR 5).
+  Deploys the alarm + alerting plumbing for the 7-day production run.
+
+    - SNS topic `wistia-prod-alerts` with an email subscription.
+    - 1 CloudWatch alarm watching the Lambda `wistia-prod-ingest`
+      Errors metric (>= 1 error in any 5-minute window).
+    - 1 EventBridge rule capturing FAILED Glue Job State Change events
+      for all 3 jobs (wistia-prod-{bronze,silver,gold}). EventBridge
+      fires immediately on state change — Glue's CloudWatch failure
+      metrics are delayed and per-job (would need 3 alarms), so the
+      single rule is both faster and simpler.
+
+  The SNS subscription requires an out-of-band email confirmation (AWS
+  sends a "Confirm subscription" link to the configured address); without
+  that click, the topic is created but no emails arrive.
+
+Parameters:
+
+  Env:
+    Type: String
+    Default: prod
+    AllowedValues:
+      - dev
+      - prod
+    Description: Deployment environment. Must match the foundation stack's Env.
+
+  AlertEmail:
+    Type: String
+    Default: vitordverissimo@gmail.com
+    Description: |
+      Email subscribed to the SNS alert topic. AWS sends a confirmation
+      link to this address on stack create; alerts are dropped silently
+      until the subscription is confirmed.
+
+Resources:
+
+  # =========================================================================
+  # SNS topic — fan-out point for both the CloudWatch alarm action and
+  # the EventBridge rule target.
+  # =========================================================================
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub wistia-${Env}-alerts
+      DisplayName: Wistia pipeline alerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+      Tags:
+        - Key: project
+          Value: wistia
+        - Key: env
+          Value: !Ref Env
+        - Key: stack
+          Value: monitoring
+
+  # =========================================================================
+  # SNS topic policy — by default, only the topic owner can publish.
+  # EventBridge needs explicit permission to publish failure events.
+  # CloudWatch alarms publish via the AWS-managed `cloudwatch.amazonaws.com`
+  # principal which is also allowed here.
+  # =========================================================================
+  AlertTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref AlertTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridgePublish
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref AlertTopic
+          - Sid: AllowCloudWatchAlarmsPublish
+            Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref AlertTopic
+
+  # =========================================================================
+  # CloudWatch alarm — fires when the ingest Lambda emits >= 1 Errors metric
+  # in any 5-minute window. `TreatMissingData: notBreaching` is critical:
+  # otherwise the alarm flips to INSUFFICIENT_DATA between daily invocations
+  # (only one data point per day) and the SNS topic emails noise.
+  # =========================================================================
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub wistia-${Env}-ingest-errors
+      AlarmDescription: |
+        Wistia ingest Lambda emitted >= 1 error in the last 5 minutes.
+        Investigate at CloudWatch Logs /aws/lambda/wistia-prod-ingest.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub wistia-${Env}-ingest
+      Statistic: Sum
+      Period: 300                  # 5 minutes
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref AlertTopic
+      OKActions:
+        - !Ref AlertTopic           # also notify on recovery so we know it cleared
+
+  # =========================================================================
+  # EventBridge rule — captures FAILED Glue Job State Change events for
+  # all 3 transform jobs. EventBridge emits on every state transition; we
+  # match FAILED + jobName in our set, then route to the SNS topic.
+  #
+  # Why this and not CloudWatch alarms:
+  #   - Fires immediately on state change (~seconds), not on metric
+  #     aggregation delay (1-5 minutes).
+  #   - Single resource for all 3 jobs vs. 1 alarm per job.
+  #   - Captures STOPPED + TIMEOUT states as well by extending the pattern.
+  # =========================================================================
+  GlueJobFailureRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub wistia-${Env}-glue-job-failures
+      Description: |
+        Catches FAILED state transitions on any Wistia Glue job and routes
+        to the SNS alert topic.
+      EventBusName: default
+      EventPattern:
+        source:
+          - aws.glue
+        detail-type:
+          - "Glue Job State Change"
+        detail:
+          state:
+            - FAILED
+            - TIMEOUT
+            - STOPPED
+          jobName:
+            - !Sub wistia-${Env}-bronze
+            - !Sub wistia-${Env}-silver
+            - !Sub wistia-${Env}-gold
+      State: ENABLED
+      Targets:
+        - Arn: !Ref AlertTopic
+          Id: glue-failure-sns-target
+          # InputTransformer keeps the SNS email body short + readable
+          # instead of dumping the full EventBridge envelope JSON.
+          # EventBridge requires InputTemplate to be a single-line
+          # JSON-encoded string — embedded newlines fail validation;
+          # use \n escapes inside the quoted string for line breaks.
+          InputTransformer:
+            InputPathsMap:
+              jobName: $.detail.jobName
+              jobRunId: $.detail.jobRunId
+              state: $.detail.state
+              severity: $.detail.severity
+              message: $.detail.message
+            InputTemplate: '"Wistia Glue job <jobName> entered state <state> (run <jobRunId>). Severity: <severity>. Message: <message>. CloudWatch logs: /aws-glue/jobs/output (filter by jobRunId)."'
+
+Outputs:
+
+  AlertTopicArn:
+    Description: SNS topic ARN. Other stacks could attach alarms by importing this.
+    Value: !Ref AlertTopic
+    Export:
+      Name: !Sub wistia-${Env}-alert-topic
+
+  LambdaAlarmName:
+    Description: Name of the Lambda error alarm.
+    Value: !Ref LambdaErrorAlarm
+
+  GlueFailureRuleName:
+    Description: Name of the Glue failure EventBridge rule.
+    Value: !Ref GlueJobFailureRule

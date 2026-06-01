@@ -130,16 +130,15 @@ Resources:
       RetentionInDays: 14
 
   # =========================================================================
-  # EventBridge schedule. Deploys DISABLED — flip to ENABLED in PR 5 to start
-  # the 7-day production run.
+  # EventBridge schedule. Activated in PR 5 for the 7-day production run.
   # =========================================================================
   IngestSchedule:
     Type: AWS::Events::Rule
     Properties:
       Name: !Sub wistia-${Env}-ingest-daily
-      Description: Daily trigger for the Wistia ingest Lambda. DISABLED until PR 5.
+      Description: Daily trigger for the Wistia ingest Lambda.
       ScheduleExpression: !Ref ScheduleExpression
-      State: DISABLED
+      State: ENABLED
       Targets:
         - Arn: !GetAtt IngestFunction.Arn
           Id: ingest-target

@@ -289,18 +289,23 @@ Resources:
   #                    GoldJob. StartOnCreation: true.
   # =========================================================================
 
-  # ON_DEMAND entry trigger — fires Bronze when `aws glue start-workflow-run`
-  # is called. PR 5 replaces this with a SCHEDULED trigger (different name)
-  # for the 7-day production cron; a Glue workflow can only have ONE
-  # starting trigger, so this is either-or, not both. ``ScheduleExpression``
-  # parameter (declared above) is kept for PR 5's use.
-  StartTrigger:
+  # PR 5: SCHEDULED entry trigger — fires Bronze on the daily cron. Both the
+  # logical ID and the explicit Name differ from PR 3's ON_DEMAND trigger
+  # (`wistia-${Env}-on-demand-start`) because CFN cannot replace a
+  # custom-named resource when the type changes (see
+  # `troubleshooting/known_issues.md` #12). CFN deletes the old trigger
+  # by its known name and creates this new one. A Glue workflow can have
+  # only ONE starting trigger, so the swap is mandatory — they cannot
+  # coexist.
+  ScheduledStartTrigger:
     Type: AWS::Glue::Trigger
     Properties:
-      Name: !Sub wistia-${Env}-on-demand-start
-      Type: ON_DEMAND
+      Name: !Sub wistia-${Env}-scheduled-start
+      Type: SCHEDULED
+      Schedule: !Ref ScheduleExpression
+      StartOnCreation: true            # activates the cron on stack update
       WorkflowName: !Ref TransformsWorkflow
-      Description: Manual entry point. PR 5 replaces with SCHEDULED for prod cron.
+      Description: Daily prod cron entry point. Activated in PR 5.
       Actions:
         - JobName: !Ref BronzeJob
 
@@ -357,5 +362,5 @@ Outputs:
     Value: !Ref GoldJob
 
   StartTriggerName:
-    Description: Name of the on-demand starting trigger. PR 5 replaces with SCHEDULED.
-    Value: !Ref StartTrigger
+    Description: Name of the SCHEDULED starting trigger (PR 5).
+    Value: !Ref ScheduledStartTrigger

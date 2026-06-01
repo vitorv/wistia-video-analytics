@@ -10,7 +10,7 @@ serves a **Streamlit** dashboard. The production target is AWS (Phase 3).
 | --- | --- | --- |
 | **Phase 1** | Ingestion layer — Wistia API → local `landing/` zone | ✅ Complete |
 | **Phase 2** | Bronze → Silver → Gold transforms + Streamlit dashboard, all local | ✅ Complete |
-| **Phase 3** | AWS deployment (Lambda + Glue + EventBridge + ECS Fargate) via CloudFormation; 7-day production run | ⏳ Not started |
+| **Phase 3** | AWS deployment (Lambda + Glue + EventBridge + ECS Fargate) via CloudFormation; 7-day production run | ✅ Complete |
 
 ## Local architecture (Phase 2)
 
@@ -124,7 +124,13 @@ src/
   common/             shared logging (JSON line formatter for CloudWatch)
   ingestion/          Phase 1 — client, extractors, landing, watermark, pipeline
   transforms/         Phase 2 — PySpark Bronze → Silver → Gold transforms
-  dashboard/          Phase 2 — Streamlit UI + pandas data layer
+  transforms/glue/    Phase 3 — Glue 5.0 entry-point scripts (one per layer)
+  dashboard/          Phase 2 — Streamlit UI + pandas data layer (S3-aware in Phase 3)
+infra/
+  cloudformation/     Phase 3 — 5 CFN templates (one per stack)
+  scripts/            Phase 3 — packaging + build + teardown PowerShell scripts
+docs/aws-console-guides/
+                      Phase 3 — web-UI walkthroughs (one per PR)
 tests/                test suite + sanitized fixtures
 scripts/              one-off API exploration scripts (excluded from gates)
 vendor/               (Windows local-dev only; gitignored) Hadoop native binaries
@@ -143,3 +149,62 @@ gitignored). Phase 1 + 2 ADRs:
 - **ADR-005** — `dim_visitor` grain: most-recent event wins (resolves D1)
 - **ADR-006** — Filter zero-activity `by_date` rows in Silver (resolves D3)
 - **ADR-007** — Branching strategy: short-lived feature branches via PR
+- **ADR-008** — CloudFormation as Infrastructure-as-Code (Phase 3)
+
+## Phase 3 — AWS deployment
+
+The pipeline runs on AWS via 5 CloudFormation stacks. Deploy order:
+
+```powershell
+# 1. Foundation — S3 data lake + artifacts buckets
+aws cloudformation deploy --stack-name wistia-foundation `
+  --template-file infra/cloudformation/foundation.yaml `
+  --parameter-overrides Env=prod --region us-east-1
+
+# 2. Ingest — Lambda + EventBridge (daily 06:00 UTC)
+./infra/scripts/package-lambda.ps1 -Upload
+aws cloudformation deploy --stack-name wistia-ingest `
+  --template-file infra/cloudformation/ingest.yaml `
+  --capabilities CAPABILITY_NAMED_IAM `
+  --parameter-overrides Env=prod WistiaApiToken=$Token --region us-east-1
+
+# 3. Transforms — 3 Glue jobs + Workflow + SCHEDULED trigger (06:15 UTC)
+./infra/scripts/package-transforms.ps1 -Upload
+aws cloudformation deploy --stack-name wistia-transforms `
+  --template-file infra/cloudformation/transforms.yaml `
+  --capabilities CAPABILITY_NAMED_IAM `
+  --parameter-overrides Env=prod --region us-east-1
+
+# 4. Dashboard — ECR + ECS Fargate + ALB. Two-phase: deploy without
+#    Service, push image, deploy with Service.
+aws cloudformation deploy --stack-name wistia-dashboard `
+  --template-file infra/cloudformation/dashboard.yaml `
+  --capabilities CAPABILITY_NAMED_IAM `
+  --parameter-overrides Env=prod DeployService=false `
+    DefaultVpcId=$VpcId DefaultPublicSubnetIds=$SubnetCsv --region us-east-1
+./infra/scripts/build-dashboard-image.ps1
+aws cloudformation deploy --stack-name wistia-dashboard `
+  --template-file infra/cloudformation/dashboard.yaml `
+  --capabilities CAPABILITY_NAMED_IAM `
+  --parameter-overrides Env=prod DeployService=true `
+    DefaultVpcId=$VpcId DefaultPublicSubnetIds=$SubnetCsv --region us-east-1
+
+# 5. Monitoring — SNS alerts + Lambda alarm + Glue failure rule
+aws cloudformation deploy --stack-name wistia-monitoring `
+  --template-file infra/cloudformation/monitoring.yaml `
+  --parameter-overrides Env=prod AlertEmail=you@example.com --region us-east-1
+# Confirm the SNS subscription email AWS sends to that address.
+```
+
+Step-by-step console walkthroughs live in
+[`docs/aws-console-guides/`](docs/aws-console-guides/) (one per PR).
+
+### Tear-down
+
+```powershell
+./infra/scripts/teardown.ps1 -WhatIf   # preview
+./infra/scripts/teardown.ps1           # confirm prompt, then live
+```
+
+Empties the ECR repo + both S3 buckets, then deletes all 5 stacks in
+reverse dependency order. Run rate after: ~$0/day.
